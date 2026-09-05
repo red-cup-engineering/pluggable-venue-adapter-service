@@ -1,7 +1,8 @@
 import { EMPTY_WITNESS_ROOT, identifyJsonSemanticContent } from "@red-cup-engineering/semantic-content-identify-service";
+import { canonicalJson as canonical } from "@red-cup-engineering/canonical-json-service";
 
 const semanticId = (value) => identifyJsonSemanticContent({ objectKind: "brokerage.pluggable-venue-adapter.record", value, witnessRoot: EMPTY_WITNESS_ROOT }).id;
-const canonical = (v) => v === null || typeof v !== "object" ? JSON.stringify(v) : Array.isArray(v) ? `[${v.map(canonical).join(",")}]` : `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canonical(v[k])}`).join(",")}}`;
+
 const identify = (body) => ({ id: semanticId(body), ...body });
 const CREDENTIAL_FIELDS = new Set(["authorization", "apikey", "apikeyid", "apisecret", "clientid", "clientsecret", "secret", "token", "accesstoken", "refreshtoken", "privatekey", "password"]);
 const credentialField = (key) => { const normalized = String(key).toLowerCase().replace(/[-_\s]/gu, ""); return [...CREDENTIAL_FIELDS, "apisecretkey"].some((suffix) => normalized === suffix || normalized.endsWith(suffix)); };

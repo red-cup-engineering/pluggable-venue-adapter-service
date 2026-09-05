@@ -12,10 +12,12 @@
     "./src/alpaca-adapter.mjs": "./src/alpaca-adapter.mjs"
   },
   "scripts": {
-    "check": "node --check src/alpaca-adapter.mjs && node --check src/alpaca-broker-admin.mjs"
+    "check": "node --check src/alpaca-adapter.mjs && node --check src/alpaca-broker-admin.mjs",
+    "test": "node --test test/*.test.mjs"
   },
   "description": "pluggable-venue-adapter-service sovereign enterprise",
   "dependencies": {
+    "@red-cup-engineering/canonical-json-service": "0.2.1",
     "@red-cup-engineering/semantic-content-identify-service": "0.2.7"
   }
 }
