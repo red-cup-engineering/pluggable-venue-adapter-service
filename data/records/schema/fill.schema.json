@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://registry.561.group/@red-cup-engineering/pluggable-venue-adapter-service/data/records/schema/fill.schema.json",
+  "title": "pluggableVenueAdapterFill",
+  "description": "This package's fill records are exactly venue-algebra-services-section's canonical fill (task:venue-algebra-lift): every adapter registered under this package (the alpaca export and any adapter added beside it) must emit this shape.",
+  "allOf": [
+    { "$ref": "https://registry.561.group/@red-cup-engineering/venue-algebra-services-section/data/records/schema/fill.schema.json" }
+  ]
+}
