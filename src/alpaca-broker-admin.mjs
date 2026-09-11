@@ -1,8 +1,6 @@
-import { EMPTY_WITNESS_ROOT, identifyJsonSemanticContent } from "@red-cup-engineering/semantic-content-identify-service";
-import { canonicalJson as canonical } from "@red-cup-engineering/canonical-json-service";
+import { brokerageRecordSemanticId } from "./brokerage-record-identity.mjs";
 
-const semanticId = (value) => identifyJsonSemanticContent({ objectKind: "brokerage.pluggable-venue-adapter.record", value, witnessRoot: EMPTY_WITNESS_ROOT }).id;
-
+const semanticId = brokerageRecordSemanticId("brokerage.pluggable-venue-adapter.record");
 const identify = (body) => ({ id: semanticId(body), ...body });
 const CREDENTIAL = /^(authorization|api[-_]?key|api[-_]?secret|secret|token|access[-_]?token|refresh[-_]?token|private[-_]?key|password)$/iu;
 function rejectCredentials(value, seen = new Set()) { if (!value || typeof value !== "object" || seen.has(value)) return; seen.add(value); for (const [key, member] of Object.entries(value)) { if (CREDENTIAL.test(key)) throw new TypeError("credential-bearing-broker-administration-request-refused"); rejectCredentials(member, seen); } }
