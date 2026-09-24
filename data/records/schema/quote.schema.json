@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://registry.561.group/@red-cup-engineering/pluggable-venue-adapter-service/data/records/schema/quote.schema.json",
+  "title": "pluggableVenueAdapterQuote",
+  "description": "This package's quote reads are exactly venue-algebra-services-section's canonical quote (task:venue-algebra-lift): every adapter registered under this package must return this shape from its market-read operation.",
+  "allOf": [
+    { "$ref": "https://registry.561.group/@red-cup-engineering/venue-algebra-services-section/data/records/schema/quote.schema.json" }
+  ]
+}
