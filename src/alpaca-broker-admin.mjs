@@ -1,6 +1,6 @@
-import { brokerageRecordSemanticId } from "./brokerage-record-identity.mjs";
+import { semanticIdOf } from "@red-cup-engineering/computer-code-engineering-services-section/semiotic-expression-notation/semantic-content-identity";
 
-const semanticId = brokerageRecordSemanticId("brokerage.pluggable-venue-adapter.record");
+const semanticId = semanticIdOf("brokerage.pluggable-venue-adapter.record");
 const identify = (body) => ({ id: semanticId(body), ...body });
 const CREDENTIAL = /^(authorization|api[-_]?key|api[-_]?secret|secret|token|access[-_]?token|refresh[-_]?token|private[-_]?key|password)$/iu;
 function rejectCredentials(value, seen = new Set()) { if (!value || typeof value !== "object" || seen.has(value)) return; seen.add(value); for (const [key, member] of Object.entries(value)) { if (CREDENTIAL.test(key)) throw new TypeError("credential-bearing-broker-administration-request-refused"); rejectCredentials(member, seen); } }
