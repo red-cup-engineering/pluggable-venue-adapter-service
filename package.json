@@ -17,6 +17,7 @@
   },
   "description": "pluggable-venue-adapter-service sovereign enterprise",
   "dependencies": {
-    "@red-cup-engineering/computer-code-engineering-services-section": "0.1.0"
+    "@red-cup-engineering/computer-code-engineering-services-section": "0.1.0",
+    "@red-cup-engineering/computer-content-engineering-services-section": "0.1.0"
   }
 }
