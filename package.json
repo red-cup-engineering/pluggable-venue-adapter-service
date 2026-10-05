@@ -9,7 +9,8 @@
   "exports": {
     "./alpaca": "./src/alpaca-adapter.mjs",
     "./alpaca-broker-admin": "./src/alpaca-broker-admin.mjs",
-    "./src/alpaca-adapter.mjs": "./src/alpaca-adapter.mjs"
+    "./src/alpaca-adapter.mjs": "./src/alpaca-adapter.mjs",
+    "./kalshi": "./src/kalshi-adapter.mjs"
   },
   "scripts": {
     "check": "node --check src/alpaca-adapter.mjs && node --check src/alpaca-broker-admin.mjs",
