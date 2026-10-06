@@ -8,7 +8,7 @@ function rejectCredentials(value, seen = new Set()) { if (!value || typeof value
 function admit(grant, scope, operation, now) { rejectCredentials(operation); const at = Date.parse(now), expiry = Date.parse(grant?.validUntil); if (!Number.isFinite(at) || !Number.isFinite(expiry)) throw new TypeError("authority-time-invalid"); if (grant?.type !== "RevocableBrokerageAuthorityGrant" || grant.revoked === true) throw new TypeError("current-authority-grant-required"); if (at >= expiry) throw new TypeError("authority-expired"); if (!grant.scopes?.includes(scope)) throw new TypeError("venue-operation-scope-refused"); return grant; }
 function clean(value, seen = new Set()) { if (!value || typeof value !== "object") return value; if (seen.has(value)) return null; seen.add(value); if (Array.isArray(value)) return value.map((member) => clean(member, seen)); return Object.fromEntries(Object.entries(value).filter(([key]) => !credentialField(key)).map(([key, member]) => [key, clean(member, seen)])); }
 
-export function createAlpacaAdapter({ product, baseUrl, authorityClient }) {
+export function createAlpacaAdapter({ product, baseUrl, authorityClient, recordReceipt }) {
   if (!["alpaca-connect", "alpaca-broker", "alpaca-trading-paper", "alpaca-trading-live"].includes(product) || typeof authorityClient?.authorizedRequest !== "function") throw new TypeError("alpaca-adapter-configuration-invalid");
   let origin; try { origin = new URL(baseUrl); } catch { throw new TypeError("alpaca-adapter-base-url-invalid"); }
   if (product === "alpaca-trading-paper" && (origin.protocol !== "https:" || origin.hostname !== "paper-api.alpaca.markets" || origin.port !== "" || origin.username || origin.password || origin.pathname !== "/" || origin.search || origin.hash)) throw new TypeError("paper-trading-base-url-refused");
@@ -25,11 +25,14 @@ export function createAlpacaAdapter({ product, baseUrl, authorityClient }) {
     const receiptBody = { type: "AlpacaVenueOperationReceipt", version: 1, product, grant: grant?.id ?? observationAuthorization.id, scope, method, path,
       status: response.status, venueRequestId: response.headers?.["x-request-id"] ?? null, observedAt: now, payload: clean(response.body),
       credentialsExported: false, authorityCustodyReceipt: response.authorityCustodyReceipt };
-    return Object.freeze(identify(receiptBody));
+    const receipt = Object.freeze(identify(receiptBody));
+    if (recordReceipt) await recordReceipt(receipt);
+    return receipt;
   };
   return Object.freeze({
     readAccount: ({ grant, observationAuthorization, now }) => call({ grant, observationAuthorization, scope: "account:read", method: "GET", path: product === "alpaca-broker" ? `/v1/trading/accounts/${encodeURIComponent(grant.accountReference)}/account` : "/v2/account", now }),
     listPositions: ({ grant, observationAuthorization, now }) => call({ grant, observationAuthorization, scope: "positions:read", method: "GET", path: product === "alpaca-broker" ? `/v1/trading/accounts/${encodeURIComponent(grant.accountReference)}/positions` : "/v2/positions", now }),
+    listOpenOrders: ({ grant, now }) => call({ grant, scope: "orders:read", method: "GET", path: "/v2/orders?status=open&limit=500", now }),
     getOrderByClientOrderId: ({ grant, clientOrderId, now }) => {
       if (typeof clientOrderId !== "string" || clientOrderId.length === 0 || clientOrderId.length > 128) throw new TypeError("client-order-id-required");
       return call({ grant, scope: "orders:read", method: "GET", path: `/v2/orders:by_client_order_id?client_order_id=${encodeURIComponent(clientOrderId)}`, now });

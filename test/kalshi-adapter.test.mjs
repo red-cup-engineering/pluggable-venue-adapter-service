@@ -33,8 +33,8 @@ test("normalizeKalshiAccount: equity is balance plus portfolio, free cash exclud
   });
   assert.equal(account.cashCents, 2500);
   assert.equal(account.equityCents, 2800);
-  assert.equal(account.restingCollateralCents, 96 * 10 + 97 * 2);
-  assert.equal(account.freeCashCents, 2500 - 960 - 194);
+  assert.equal(account.restingCollateralCents, 96 * 10 + 97 * 2 + 50 * 3);
+  assert.equal(account.freeCashCents, 2500 - 960 - 194 - 150);
   assert.deepEqual(account.positions, [{ ticker: "KXHIGHNY-26OCT04-T50", eventTicker: "KXHIGHNY-26OCT04", side: "no", contracts: 4, costCents: 388 }]);
   assert.deepEqual(account.resting.map((order) => [order.orderId, order.bookSide, order.priceCents, order.count]), [["a", "ask", 4, 10], ["b", "bid", 50, 3], ["c", "ask", 3, 2]]);
   assert.throws(() => normalizeKalshiAccount({ balance: {} }), /kalshi-balance-required/);
@@ -152,4 +152,10 @@ test("fills come with a reconciliation cursor", async () => {
   const receipt = await createKalshiAdapter({ client: fakeClient().client }).listFills({ grant, sinceTs: 0, now });
   assert.equal(receipt.payload.fills.length, 1);
   assert.equal(receipt.payload.cursor, Math.floor(Date.parse("2026-10-03T12:30:00Z") / 1000));
+});
+
+test("fractional positions and both resting sides retain their actual collateral",()=>{
+ const account=normalizeKalshiAccount({balance:{balance:1000,portfolio_value:0},orders:[{order_id:'bid',ticker:'EVENT-X',book_side:'bid',yes_price_dollars:'0.025',remaining_count_fp:'10.50'},{order_id:'ask',ticker:'EVENT-Y',book_side:'ask',yes_price_dollars:'0.025',remaining_count_fp:'2.50'}]});
+ assert.equal(account.resting[0].count,10.5);assert.equal(account.resting[0].priceCents,2.5);assert.equal(account.restingCollateralCents,271);assert.equal(account.freeCashCents,729);
+ assert.throws(()=>normalizeKalshiAccount({balance:{balance:1000},positions:[{ticker:'EVENT-X',position_fp:'unknown',market_exposure_dollars:'1'}]}),/position-value-invalid/);
 });

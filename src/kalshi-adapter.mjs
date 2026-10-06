@@ -33,8 +33,8 @@ function admit(grant, scope, operation, now) { rejectCredentials(operation); con
 function clean(value, seen = new Set()) { if (!value || typeof value !== "object") return value; if (seen.has(value)) return null; seen.add(value); if (Array.isArray(value)) return value.map((member) => clean(member, seen)); return Object.fromEntries(Object.entries(value).filter(([key]) => !credentialField(key)).map(([key, member]) => [key, clean(member, seen)])); }
 
 const cents = (dollars) => Math.round(Number(dollars) * 100);
-const riskOf = ({ side, count, price }) => Math.round(Number(count) * (side === "ask" ? 100 - Math.round(Number(price) * 100) : Math.round(Number(price) * 100)));
-const restingRisk = (order) => order.count * (order.bookSide === "ask" ? 100 - order.priceCents : order.priceCents);
+const riskOf = ({ side, count, price }) => Math.ceil(Number(count) * (side === "ask" ? 100 - Number(price) * 100 : Number(price) * 100) - 1e-9);
+const restingRisk = (order) => Math.ceil(order.count * (order.bookSide === "ask" ? 100 - order.priceCents : order.priceCents) - 1e-9);
 
 /**
  * The principal contract's verdict on one order, against an account reading. Pure.
@@ -77,9 +77,11 @@ export function normalizeKalshiAccount({ balance, positions = [], orders = [] } 
   const resting = restingOrders.map((order) => ({
     orderId: order.order_id, ticker: order.ticker, eventTicker: eventOf(order.ticker),
     bookSide: order.book_side ?? ((order.side === "yes" && order.action === "sell") || (order.side === "no" && order.action === "buy") ? "ask" : "bid"),
-    priceCents: cents(order.yes_price_dollars), count: Math.round(Number(order.remaining_count_fp)), expiration: order.expiration_time ?? null,
+    priceCents: Number(order.yes_price_dollars) * 100, count: Number(order.remaining_count_fp), expiration: order.expiration_time ?? null,
   }));
-  const restingCollateralCents = resting.filter((order) => order.bookSide === "ask").reduce((sum, order) => sum + (100 - order.priceCents) * order.count, 0);
+  if (held.some(row=>!Number.isFinite(row.contracts)||row.contracts<=0||!Number.isFinite(row.costCents)||row.costCents<0)) throw new TypeError('kalshi-position-value-invalid');
+  if (resting.some((order) => !['bid','ask'].includes(order.bookSide) || !Number.isFinite(order.priceCents) || order.priceCents < 0 || order.priceCents > 100 || !Number.isFinite(order.count) || order.count < 0)) throw new TypeError('kalshi-resting-order-value-invalid');
+  const restingCollateralCents = resting.reduce((sum, order) => sum + Math.ceil((order.bookSide === 'ask' ? 100 - order.priceCents : order.priceCents) * order.count - 1e-9), 0);
   const cashCents = balance.balance, portfolioCents = Number.isInteger(balance.portfolio_value) ? balance.portfolio_value : 0;
   return { cashCents, equityCents: cashCents + portfolioCents, freeCashCents: cashCents - restingCollateralCents, restingCollateralCents, positions: held, resting };
 }
