@@ -37,7 +37,19 @@ export function createAlpacaAdapter({ product, baseUrl, authorityClient, recordR
       if (typeof clientOrderId !== "string" || clientOrderId.length === 0 || clientOrderId.length > 128) throw new TypeError("client-order-id-required");
       return call({ grant, scope: "orders:read", method: "GET", path: `/v2/orders:by_client_order_id?client_order_id=${encodeURIComponent(clientOrderId)}`, now });
     },
-    listActivities: ({ grant, activityType = "FILL", now }) => call({ grant, scope: "activities:read", method: "GET", path: `/v2/account/activities?activity_types=${encodeURIComponent(activityType)}`, now }),
+    listActivities: ({ grant, activityType = "FILL", orderId, pageToken, pageSize = 100, now }) => {
+      if (!Number.isInteger(pageSize) || pageSize < 1 || pageSize > 100) throw new TypeError("activity-page-size-invalid");
+      const query = new URLSearchParams({ activity_types: activityType });
+      if (orderId !== undefined) {
+        if (typeof orderId !== "string" || !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/iu.test(orderId)) throw new TypeError("activity-order-id-invalid");
+        query.set("order_id", orderId); query.set("page_size", String(pageSize)); query.set("direction", "asc");
+        if (pageToken !== undefined) {
+          if (typeof pageToken !== "string" || !pageToken.length || pageToken.length > 512) throw new TypeError("activity-page-token-invalid");
+          query.set("page_token", pageToken);
+        }
+      } else if (pageToken !== undefined) throw new TypeError("activity-pagination-requires-order");
+      return call({ grant, scope: "activities:read", method: "GET", path: `/v2/account/activities?${query}`, now });
+    },
     listCryptoWallets: ({ grant, now }) => call({ grant, scope: "wallets:read", method: "GET", path: `/v1/accounts/${encodeURIComponent(grant.accountReference)}/wallets`, now }),
     placeOrder: ({ grant, order, operationAuthorizationReference, now }) => call({ grant, scope: product === "alpaca-trading-paper" ? "orders:paper" : "orders:live", method: "POST", path: product === "alpaca-broker" ? `/v1/trading/accounts/${encodeURIComponent(grant.accountReference)}/orders` : "/v2/orders", body: order, operationAuthorizationReference, now }),
     cancelOrder: ({ grant, orderId, operationAuthorizationReference, now }) => {
