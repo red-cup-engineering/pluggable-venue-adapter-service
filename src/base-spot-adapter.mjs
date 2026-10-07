@@ -189,7 +189,7 @@ export function createBaseNativeUsdcExecutor({directory,resolveExecutionRecords,
   const at=clock(),age=Date.parse(at)-Date.parse(principalAuthorization?.observedAt);
   if(!reference(principalAuthorization?.id)||principalAuthorization.authorized!==true||principalAuthorization.principal!=='561-group'||principalAuthorization.office!=='emsenn-personal-chief-financial-officer'||principalAuthorization.grant!==records.grant?.id||!Number.isFinite(age)||age<0||age>60000)throw new TypeError('current-base-principal-office-authorization-required');
   const admission=admitNativeUsdcExecution({...records,at});
-  const allocations=allocationsFor(decision,{venue:'evm',instrument:'USDC',side:'long',chainId:8453,protocol:BASE_SPOT.protocol,at});
+  const allocations=allocationsFor(decision,{venue:'evm',principal:principalAuthorization.principal,instrument:'USDC',side:'long',chainId:8453,protocol:BASE_SPOT.protocol,at});
   if(allocations.length!==1||allocations[0].id!==quote.id||allocations[0].blockHash!==quote.boundary.blockHash||allocations[0].funding?.instrument!=='ETH'||BigInt(preparation.transaction.value)>fundingAtoms(allocations[0].funding.units))throw new TypeError('exact-joint-decision-base-native-funding-required');
   return freezeRecord({...records,admission});
  }

@@ -286,11 +286,11 @@ export function createGmxAdapter({ chainId = 42161, rpc, fetchJson } = {}) {
       const fee = requireFee(order.executionFeeWei);
       const size = BigInt(order.sizeDeltaUsd);
       if (increasing) {
-        if (marketDecision && Math.ceil(Number(order.collateralUsd) * 100 - 1e-9) > allocationFor(marketDecision, { venue: 'evm', instrument: order.market, side: order.isLong ? 'long' : 'short', chainId, protocol: 'gmx', at: now })) throw new RangeError('gmx-collateral-exceeds-shared-market-allocation');
+        if (marketDecision && Math.ceil(Number(order.collateralUsd) * 100 - 1e-9) > allocationFor(marketDecision, { venue: 'evm', principal: grant.principal, instrument: order.market, side: order.isLong ? 'long' : 'short', chainId, protocol: 'gmx', at: now })) throw new RangeError('gmx-collateral-exceeds-shared-market-allocation');
         if (!(BigInt(order.collateralAmount) > 0n) || !(Number(order.collateralUsd) > 0)) throw new RangeError("gmx-collateral-required");
         const leverage = e30ToUsd(size) / Number(order.collateralUsd);
         if (marketDecision) {
-          const funded = allocationsFor(marketDecision, { venue: 'evm', instrument: order.market, side: order.isLong ? 'long' : 'short', chainId, protocol: 'gmx', at: now });
+          const funded = allocationsFor(marketDecision, { venue: 'evm', principal: grant.principal, instrument: order.market, side: order.isLong ? 'long' : 'short', chainId, protocol: 'gmx', at: now });
           if (funded.length !== 1 || Math.abs(funded[0].leverage - leverage) > 1e-8 || !same(funded[0].collateralToken, order.collateralToken)) throw new RangeError('gmx-payoff-model-and-order-exposure-differ');
         }
         const maxLeverage = grant.limits?.maxLeverage;
