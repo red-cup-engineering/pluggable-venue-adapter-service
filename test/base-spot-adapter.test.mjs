@@ -97,3 +97,10 @@ test('declared token balances share the account boundary and remain explicitly p
  const adapter=createBaseSpotAdapter({readPool:pool,clock:()=>at});const row=await adapter.readAccount({tokens:[bad,extra]});assert.equal(boundaries,1);assert.equal(row.tokenBalances[0].balanceAtomic,'123456789012345678901');assert.equal(row.tokenBalances[1].status,'refused');assert.equal(row.coverage.fullWallet,false);assert.equal(row.coverage.usdValuation,false);assert.equal(row.nativeBalanceWei,'100');assert.equal(calls.filter(c=>c.method==='eth_call').length,4);assert.ok(calls.every(c=>['eth_call','eth_getBalance'].includes(c.method)));
  await assert.rejects(adapter.readAccount({tokens:[extra,extra]}),/unique/);await assert.rejects(adapter.readAccount({tokens:Array(129).fill(extra)}),/bounded/);await assert.rejects(adapter.readAccount({tokens:['not-an-address']}));assert.equal(boundaries,1);
 });
+
+test('provider failures escape token refusal handling so the upstream reader can fail over',async()=>{
+ const erc20=new Interface(['function balanceOf(address) view returns(uint256)']);const extra='0x1111111111111111111111111111111111111111';let retries=0;
+ const run=async(failing,operation)=>operation({request:async request=>{if(request.method==='eth_getBalance')return '0x01';if(failing&&request.params[0].to===extra)throw Object.assign(new Error('provider rate limit'),{code:'PUBLIC_EVM_PROVIDER_READ_FAILED'});return erc20.encodeFunctionResult('balanceOf',[7n]);}});
+ const pool={chain:{id:8453},requestAtBoundary:async({operation})=>{let value;try{value=await run(true,operation);}catch(error){assert.equal(error.code,'PUBLIC_EVM_PROVIDER_READ_FAILED');retries++;value=await run(false,operation);}return {value,boundary:{chainId:8453,blockNumber:'10',blockHash:'0x'+'ab'.repeat(32)},provider:{id:'fallback'},attempts:[],failures:[]};}};
+ const row=await createBaseSpotAdapter({readPool:pool,clock:()=>at}).readAccount({tokens:[extra]});assert.equal(retries,1);assert.equal(row.tokenBalances[0].status,'observed');assert.equal(row.provider.id,'fallback');
+});

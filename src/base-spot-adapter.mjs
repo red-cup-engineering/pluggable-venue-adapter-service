@@ -45,6 +45,8 @@ export function createBaseSpotAdapter({readPool,clock=()=>new Date().toISOString
    const balances={nativeBalanceWei:await call({method:'eth_getBalance',params:[BASE_SPOT.address]},ctx),usdcBalance:await call(balanceCall(BASE_SPOT.usdc),ctx),wrappedEtherBalance:await call(balanceCall(BASE_SPOT.wrappedEther),ctx),tokenBalances:[]};
    // Public calls only, four at a time, all pinned by the same upstream carrier.
    for(let i=0;i<declared.length;i+=4){const batch=await Promise.allSettled(declared.slice(i,i+4).map(async token=>({token,balanceAtomic:erc20.decodeFunctionResult('balanceOf',await call(balanceCall(token),ctx))[0].toString()})));
+    const providerFailure=batch.find(result=>result.status==='rejected'&&['PUBLIC_EVM_PROVIDER_READ_FAILED','PUBLIC_EVM_READ_LIMIT'].includes(result.reason?.code));
+    if(providerFailure)throw providerFailure.reason;
     batch.forEach((result,j)=>balances.tokenBalances.push(result.status==='fulfilled'?{...result.value,status:'observed'}:{token:declared[i+j],status:'refused',reason:result.reason.message}));
    }
    return balances;
