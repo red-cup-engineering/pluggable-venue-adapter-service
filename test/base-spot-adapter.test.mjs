@@ -21,3 +21,34 @@ test('multicall cannot smuggle another operation or an outbound recipient',async
  const parsed=router.parseTransaction({data:transaction.data});const extra={...transaction,data:router.encodeFunctionData('multicall',[parsed.args[0],[parsed.args[1][0],parsed.args[1][0]]])};assert.throws(()=>validateNativeUsdcSwap({transaction:extra,quote,at}),/one-deadline/);
  const swap=router.encodeFunctionData('exactInputSingle',[[BASE_SPOT.wrappedEther,BASE_SPOT.usdc,500,BASE_SPOT.usdc,100000000000000n,249375n,0]]);const outbound={...transaction,data:router.encodeFunctionData('multicall',[parsed.args[0],[swap]])};assert.throws(()=>validateNativeUsdcSwap({transaction:outbound,quote,at}),/recipient/);
 });
+
+const oracle=new Interface(['function baseFee() view returns(uint256)','function getL1FeeUpperBound(uint256 unsignedTxSize) view returns(uint256)','function getOperatorFee(uint256 gasUsed) view returns(uint256)']);
+async function preparationFixture({balance=1000000000000000n,estimate=166384n,nonce=7n,changedCode=false}={}){
+ const requests=[];let preparing=false;
+ const pool={chain:{id:8453},requestAtBoundary:async({operation})=>({boundary:{chainId:8453,blockNumber:'10',blockHash:'0x'+'ab'.repeat(32)},provider:{id:'fixture'},attempts:[],failures:[],value:await operation({request:async request=>{
+  requests.push(request);
+  if(request.method==='eth_getBalance')return '0x'+balance.toString(16);
+  if(request.method==='eth_getCode')return preparing&&changedCode?'0x6001':'0x6000';
+  if(request.method==='eth_getTransactionCount')return '0x'+nonce.toString(16);
+  if(request.method==='eth_estimateGas')return '0x'+estimate.toString(16);
+  if(request.params[0].to===BASE_SPOT.quoter)return quoter.encodeFunctionResult('quoteExactInputSingle',[250000n,1n,0,73010n]);
+  const call=oracle.parseTransaction({data:request.params[0].data});
+  return oracle.encodeFunctionResult(call.name,[call.name==='baseFee'?1000000n:call.name==='getL1FeeUpperBound'?128284995305n:5000n]);
+ }})})};
+ const adapter=createBaseSpotAdapter({readPool:pool,clock:()=>at});
+ const quote=await adapter.quoteNativeToUsdc({amountInWei:'100000000000000'});preparing=true;
+ return {requests,prepare:()=>adapter.prepareNativeUsdcSwap({quote,minimumOutputAtomic:'249375',deadline:Math.floor(Date.parse(at)/1000)+30})};
+}
+test('execution preparation budgets actual simulation and separate rollup fees while retaining gas',async()=>{
+ const {requests,prepare}=await preparationFixture();const result=await prepare();
+ assert.equal(result.estimatedGas,'166384');assert.equal(result.transaction.gasLimit,'249576');
+ const expected=249576n*3000000n+2n*(128284995305n+5000n);
+ assert.equal(result.feeReserveWei,expected.toString());assert.equal(result.gasReserveWei,expected.toString());
+ assert.equal(result.transaction.nonce,7);assert.equal(result.signed,false);assert.equal(result.broadcast,false);assert.equal(result.authorityAdmissionRequired,true);
+ const simulated=requests.find(r=>r.method==='eth_estimateGas');assert.equal(simulated.params[0].to,BASE_SPOT.router);assert.equal(simulated.params[0].from,BASE_SPOT.address);
+});
+test('preparation refuses insufficient gas funding, changed router, excessive gas and unsafe nonce',async()=>{
+ for(const [options,pattern] of [[{balance:100000000000000n},/rollup-fees/],[{changedCode:true},/code-changed/],[{estimate:1000001n},/bounded-swap-gas/],[{nonce:9007199254740992n},/nonce-out-of-range/]]){
+  const {prepare}=await preparationFixture(options);await assert.rejects(prepare,pattern);
+ }
+});

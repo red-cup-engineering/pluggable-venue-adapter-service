@@ -1,4 +1,4 @@
-import { Interface, getAddress, keccak256 } from 'ethers';
+import { Interface, Transaction, getAddress, keccak256 } from 'ethers';
 import { semanticIdOf } from '@red-cup-engineering/computer-content-engineering-services-section/semantic-content-identity';
 const identify = semanticIdOf('brokerage.base-spot.record');
 export const BASE_SPOT = Object.freeze({
@@ -10,6 +10,8 @@ export const BASE_SPOT = Object.freeze({
  protocol:'uniswap-v3-native-usdc',
  sources:Object.freeze(['https://developers.uniswap.org/docs/protocols/v3/deployments/v3-base-deployments','https://developers.circle.com/stablecoins/usdc-contract-addresses']),
 });
+const gasOracleAddress='0x420000000000000000000000000000000000000F';
+const gasOracle=new Interface(['function baseFee() view returns(uint256)','function getL1FeeUpperBound(uint256 unsignedTxSize) view returns(uint256)','function getOperatorFee(uint256 gasUsed) view returns(uint256)']);
 const erc20=new Interface(['function balanceOf(address) view returns(uint256)']);
 const quoter=new Interface(['function quoteExactInputSingle((address tokenIn,address tokenOut,uint256 amountIn,uint24 fee,uint160 sqrtPriceLimitX96) params) returns(uint256 amountOut,uint160 sqrtPriceX96After,uint32 initializedTicksCrossed,uint256 gasEstimate)']);
 const router=new Interface(['function exactInputSingle((address tokenIn,address tokenOut,uint24 fee,address recipient,uint256 amountIn,uint256 amountOutMinimum,uint160 sqrtPriceLimitX96) params) payable returns(uint256 amountOut)','function multicall(uint256 deadline,bytes[] data) payable returns(bytes[] results)']);
@@ -55,7 +57,36 @@ export function createBaseSpotAdapter({readPool,clock=()=>new Date().toISOString
    router:BASE_SPOT.router,routerCodeHash:keccak256(reading.value.routerCode),tokenIn:BASE_SPOT.wrappedEther,tokenOut:BASE_SPOT.usdc,fee,amountInWei:amount.toString(),amountOutAtomic:amountOut.toString(),nativeBalanceWei:BigInt(reading.value.nativeBalanceWei).toString(),
    sqrtPriceX96After:sqrtPriceX96After.toString(),initializedTicksCrossed:Number(initializedTicksCrossed),quoterGasEstimate:gasEstimate.toString(),sources:BASE_SPOT.sources,attempts:reading.attempts,failures:reading.failures});
  }
- return Object.freeze({readAccount,quoteNativeToUsdc});
+ async function prepareNativeUsdcSwap({quote,minimumOutputAtomic,deadline}={}){
+  const observedAt=clock();const transaction=buildNativeUsdcSwap({quote,minimumOutputAtomic,deadline,at:observedAt});
+  const reading=await readPool.requestAtBoundary({operation:async ctx=>{
+   const invoke=(method,params)=>ctx.request({method,params});
+   const oracle=async(name,args=[])=>gasOracle.decodeFunctionResult(name,await invoke('eth_call',[{to:gasOracleAddress,data:gasOracle.encodeFunctionData(name,args)}]))[0];
+   const [balance,nonce,estimatedGas,baseFee,routerCode]=await Promise.all([
+    invoke('eth_getBalance',[BASE_SPOT.address]),invoke('eth_getTransactionCount',[BASE_SPOT.address]),
+    invoke('eth_estimateGas',[{from:transaction.from,to:transaction.to,data:transaction.data,value:'0x'+BigInt(transaction.value).toString(16)}]),
+    oracle('baseFee'),invoke('eth_getCode',[BASE_SPOT.router]),
+   ]);
+   if(keccak256(routerCode)!==quote.routerCodeHash)throw new TypeError('base-router-code-changed-since-quote');
+   const estimate=BigInt(estimatedGas);if(estimate<=0n||estimate>1000000n)throw new RangeError('bounded-swap-gas-estimate-required');
+   const gasLimit=(estimate*3n+1n)/2n,maxPriorityFeePerGas=1000000n,maxFeePerGas=baseFee*2n+maxPriorityFeePerGas;
+   const nonceValue=BigInt(nonce);if(nonceValue>BigInt(Number.MAX_SAFE_INTEGER))throw new RangeError('transaction-nonce-out-of-range');
+   const {from,...body}=transaction;
+   const envelope={...body,type:2,nonce:Number(nonceValue),gasLimit:gasLimit.toString(),maxFeePerGas:maxFeePerGas.toString(),maxPriorityFeePerGas:maxPriorityFeePerGas.toString()};
+   const unsignedSize=(Transaction.from(envelope).unsignedSerialized.length-2)/2;
+   const [l1FeeUpperBound,operatorFee]=await Promise.all([oracle('getL1FeeUpperBound',[unsignedSize]),oracle('getOperatorFee',[gasLimit])]);
+   // Rollup fees are separate from gasLimit * maxFeePerGas. Reserve twice
+   // their current estimates and another full fee budget for later gas needs.
+   const feeReserveWei=gasLimit*maxFeePerGas+2n*(l1FeeUpperBound+operatorFee);
+   const gasReserveWei=feeReserveWei;
+   if(BigInt(balance)<BigInt(transaction.value)+feeReserveWei+gasReserveWei)throw new RangeError('native-balance-does-not-fund-swap-and-rollup-fees');
+   return {transaction:{...envelope,from},nonceAtBoundary:nonceValue.toString(),estimatedGas:estimate.toString(),l2BaseFeeWei:baseFee.toString(),l1FeeUpperBoundWei:l1FeeUpperBound.toString(),operatorFeeWei:operatorFee.toString(),feeReserveWei:feeReserveWei.toString(),gasReserveWei:gasReserveWei.toString(),nativeBalanceWei:BigInt(balance).toString()};
+  }});
+  validateNativeUsdcSwap({transaction:reading.value.transaction,quote,at:clock()});
+  return record({type:'BaseNativeUsdcExecutionPreparation',quote:quote.id,observedAt,chainId:8453,address:BASE_SPOT.address,boundary:reading.boundary,provider:reading.provider,...reading.value,nonceDisposition:'observed-at-pinned-block-recheck-pending-before-signing',authorityAdmissionRequired:true,signed:false,broadcast:false,
+   sources:[...BASE_SPOT.sources,'https://specs.optimism.io/protocol/fjord/predeploys.html','https://raw.githubusercontent.com/ethereum-optimism/optimism/develop/packages/contracts-bedrock/src/L2/GasPriceOracle.sol']});
+ }
+ return Object.freeze({readAccount,quoteNativeToUsdc,prepareNativeUsdcSwap});
 }
 
 /** Restricted calldata, never an arbitrary router call or token approval.
