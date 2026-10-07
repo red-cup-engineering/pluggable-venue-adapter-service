@@ -11,7 +11,7 @@ export function verifyBaseSpotRecord(value){
  return value;
 }
 export const BASE_SPOT = Object.freeze({
- maximumObservedTokens:128,
+ maximumObservedTokens:256,
  chainId:8453,address:'0x224C08A8526751887a83e2711B167f890c6D078d',
  wrappedEther:'0x4200000000000000000000000000000000000006',
  usdc:'0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
