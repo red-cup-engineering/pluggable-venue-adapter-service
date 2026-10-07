@@ -3,7 +3,13 @@ import { Interface, Transaction, getAddress, keccak256 } from 'ethers';
 import { semanticIdOf } from '@red-cup-engineering/computer-content-engineering-services-section/semantic-content-identity';
 import { allocationsFor } from '@red-cup-engineering/mandate-portfolio-allocation-service/market-game';
 import { createTransactionEffectCustody } from './transaction-effect-custody.mjs';
-const identify = semanticIdOf('brokerage.base-spot.record');
+export const baseSpotRecordId = semanticIdOf('brokerage.base-spot.record');
+const identify = baseSpotRecordId;
+/** Content integrity only; this does not establish producer trust or authority. */
+export function verifyBaseSpotRecord(value){
+ const {id,...body}=value??{};if(typeof id!=='string'||identify(body)!==id)throw new TypeError('base-record-semantic-content-mismatch');
+ return value;
+}
 export const BASE_SPOT = Object.freeze({
  maximumObservedTokens:128,
  chainId:8453,address:'0x224C08A8526751887a83e2711B167f890c6D078d',
