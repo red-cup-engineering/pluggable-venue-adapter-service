@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {Interface} from 'ethers';
-import {createBaseSpotAdapter,buildNativeUsdcSwap,validateNativeUsdcSwap,BASE_SPOT} from '../src/base-spot-adapter.mjs';
+import {createBaseSpotAdapter,buildNativeUsdcSwap,validateNativeUsdcSwap,admitNativeUsdcExecution,BASE_SPOT} from '../src/base-spot-adapter.mjs';
 const at='2026-10-06T12:00:00Z';
 const quoter=new Interface(['function quoteExactInputSingle((address tokenIn,address tokenOut,uint256 amountIn,uint24 fee,uint160 sqrtPriceLimitX96) params) returns(uint256 amountOut,uint160 sqrtPriceX96After,uint32 initializedTicksCrossed,uint256 gasEstimate)']);
 async function fixture(){
@@ -37,7 +37,7 @@ async function preparationFixture({balance=1000000000000000n,estimate=166384n,no
  }})})};
  const adapter=createBaseSpotAdapter({readPool:pool,clock:()=>at});
  const quote=await adapter.quoteNativeToUsdc({amountInWei:'100000000000000'});preparing=true;
- return {requests,prepare:()=>adapter.prepareNativeUsdcSwap({quote,minimumOutputAtomic:'249375',deadline:Math.floor(Date.parse(at)/1000)+30})};
+ return {requests,quote,prepare:()=>adapter.prepareNativeUsdcSwap({quote,minimumOutputAtomic:'249375',deadline:Math.floor(Date.parse(at)/1000)+30})};
 }
 test('execution preparation budgets actual simulation and separate rollup fees while retaining gas',async()=>{
  const {requests,prepare}=await preparationFixture();const result=await prepare();
@@ -51,4 +51,25 @@ test('preparation refuses insufficient gas funding, changed router, excessive ga
  for(const [options,pattern] of [[{balance:100000000000000n},/rollup-fees/],[{changedCode:true},/code-changed/],[{estimate:1000001n},/bounded-swap-gas/],[{nonce:9007199254740992n},/nonce-out-of-range/]]){
   const {prepare}=await preparationFixture(options);await assert.rejects(prepare,pattern);
  }
+});
+
+const grant={id:'yanagi-base-wallet-trading-by-emsenn-personal-chief-financial-officer',under:'561-group',over:'emsenn-personal-chief-financial-officer',account:{venue:'eip155:8453',address:BASE_SPOT.address},limits:{max_value_per_transaction:'25 USD at the pre-trade quote',max_loss_per_utc_day:'50 USD marked at the venue quote'},valid_until:'2027-01-01'};
+const revocation={grant:grant.id,effective:false,observedAt:at};
+const marks={address:BASE_SPOT.address,utcDay:'2026-10-06',observedAt:at,nativeUsdPerEth:'2500',dayStartEquityUsd:'100',netExternalFlowsUsd:'0',currentEquityUsd:'100',reservedLossUsd:'0',sourceEvidence:['ni:///sha-256;'+'a'.repeat(43)]};
+test('Base admission includes gas in exact USD caps and aggregate marked-day loss reservations',async()=>{
+ const {quote,prepare}=await preparationFixture();const preparation=await prepare();
+ const admit=changes=>admitNativeUsdcExecution({quote,preparation,grant,revocation,marks,at,...changes});
+ const result=admit({});assert.equal(result.signed,false);assert.equal(result.broadcast,false);assert.equal(result.currentAuthorityAndPendingNonceRecheckRequired,true);
+ assert.ok(BigInt(result.transactionRiskUsdMicros)>250000n);
+ assert.throws(()=>admit({marks:{...marks,nativeUsdPerEth:'250000'}}),/25-usd/);
+ assert.throws(()=>admit({marks:{...marks,currentEquityUsd:'50'}}),/50-usd/);
+ assert.throws(()=>admit({marks:{...marks,currentEquityUsd:'70',reservedLossUsd:'20'}}),/50-usd/);
+ // Deposits must not disguise losses: starting 100 plus 50 deposited and
+ // current equity 100 is still a 50 USD loss for the day.
+ assert.throws(()=>admit({marks:{...marks,netExternalFlowsUsd:'50'}}),/50-usd/);
+ assert.throws(()=>admit({revocation:{...revocation,effective:true}}),/revocation/);
+ assert.throws(()=>admit({marks:{...marks,sourceEvidence:[]}}),/source-linked/);
+ assert.throws(()=>admit({marks:{...marks,utcDay:'2026-10-05'}}),/source-linked/);
+ assert.throws(()=>admit({marks:{...marks,nativeUsdPerEth:'2500.0000001'}}),/exact-usd/);
+ assert.throws(()=>admit({preparation:{...preparation,feeReserveWei:'0'}}),/exact-base-execution/);
 });

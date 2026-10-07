@@ -114,3 +114,41 @@ export function validateNativeUsdcSwap({transaction,quote,at=new Date().toISOStr
  if(transaction.data.toLowerCase()!==canonical.data.toLowerCase())throw new TypeError('canonical-base-swap-calldata-required');
  return Object.freeze({quote:quote.id,deadline:Number(outer.args[0]),amountInWei:quote.amountInWei,minimumOutputAtomic:params.amountOutMinimum.toString(),recipient:BASE_SPOT.address,approved:false,signed:false});
 }
+
+/** Exact USD risk check for the existing Group grant. These inputs must be
+ * resolved by the production executor from current authority and independent
+ * books; this pure check neither supplies that authority nor signs anything. */
+export function admitNativeUsdcExecution({quote,preparation,grant,revocation,marks,at=new Date().toISOString()}={}){
+ currentQuote(quote,at);
+ const {id,...body}=preparation??{};
+ if(!id||identify(body)!==id||body.type!=='BaseNativeUsdcExecutionPreparation'||body.quote!==quote.id||body.chainId!==8453||!sameAddress(body.address,BASE_SPOT.address))throw new TypeError('exact-base-execution-preparation-required');
+ const validation=validateNativeUsdcSwap({transaction:body.transaction,quote,at});
+ if(body.signed!==false||body.broadcast!==false)throw new TypeError('unsigned-base-preparation-required');
+ if(grant?.id!=='yanagi-base-wallet-trading-by-emsenn-personal-chief-financial-officer'||grant.under!=='561-group'||grant.over!=='emsenn-personal-chief-financial-officer'||grant.account?.venue!=='eip155:8453'||!sameAddress(grant.account.address,BASE_SPOT.address))throw new TypeError('recorded-base-principal-grant-required');
+ if(grant.limits?.max_value_per_transaction!=='25 USD at the pre-trade quote'||grant.limits?.max_loss_per_utc_day!=='50 USD marked at the venue quote')throw new TypeError('recorded-base-risk-limits-required');
+ const now=Date.parse(at),fresh=value=>{const age=now-Date.parse(value);return Number.isFinite(age)&&age>=0&&age<=60000;};
+ if(!Number.isFinite(now)||!Number.isFinite(Date.parse(grant.valid_until))||now>=Date.parse(grant.valid_until)||grant.revoked===true)throw new TypeError('current-base-grant-required');
+ const utcDay=new Date(now).toISOString().slice(0,10);
+ if(!fresh(body.observedAt))throw new TypeError('fresh-base-preparation-required');
+ if(revocation?.grant!==grant.id||revocation.effective!==false||!fresh(revocation.observedAt))throw new TypeError('current-base-revocation-reading-required');
+ if(marks?.address!==BASE_SPOT.address||marks.utcDay!==utcDay||!fresh(marks.observedAt)||!Array.isArray(marks.sourceEvidence)||!marks.sourceEvidence.length||marks.sourceEvidence.some(id=>typeof id!=='string'||!/^ni:\/\/\/sha-256;[A-Za-z0-9_-]{43}$/.test(id)))throw new TypeError('current-source-linked-base-books-required');
+ const usd=(value,signed=false)=>{
+  if(typeof value!=='string'||!(signed?/^-?(?:0|[1-9]\d*)(?:\.\d{1,6})?$/:/^(?:0|[1-9]\d*)(?:\.\d{1,6})?$/).test(value))throw new TypeError('exact-usd-mark-required');
+  const negative=value.startsWith('-'),[whole,fraction='']=(negative?value.slice(1):value).split('.');
+  const n=BigInt(whole)*1000000n+BigInt(fraction.padEnd(6,'0'));return negative?-n:n;
+ };
+ const nativePrice=usd(marks.nativeUsdPerEth);if(nativePrice<=0n)throw new TypeError('positive-native-usd-mark-required');
+ const fees=integer(body.feeReserveWei,'fee-reserve'),value=positive(body.transaction.value,'input');
+ const gasLimit=positive(body.transaction.gasLimit,'gas-limit'),maxFee=positive(body.transaction.maxFeePerGas,'max-fee');
+ const minimumFees=gasLimit*maxFee+2n*(integer(body.l1FeeUpperBoundWei,'l1-fee')+integer(body.operatorFeeWei,'operator-fee'));
+ if(fees!==minimumFees||integer(body.gasReserveWei,'gas-reserve')!==fees||integer(body.nativeBalanceWei,'native-balance')<value+2n*fees)throw new TypeError('base-preparation-fee-or-funding-mismatch');
+ const ceiling=(numerator,denominator)=>(numerator+denominator-1n)/denominator;
+ const transactionRisk=ceiling((value+fees)*nativePrice,1000000000000000000n);
+ if(transactionRisk>25000000n)throw new RangeError('base-transaction-exceeds-25-usd-grant');
+ const equity=usd(marks.currentEquityUsd),opening=usd(marks.dayStartEquityUsd),flows=usd(marks.netExternalFlowsUsd,true),reserved=usd(marks.reservedLossUsd);
+ const rawLoss=opening+flows-equity,markedLoss=rawLoss>0n?rawLoss:0n;
+ if(markedLoss+reserved+transactionRisk>50000000n)throw new RangeError('base-day-loss-reservations-exceed-50-usd-grant');
+ const {from,...transaction}=body.transaction;
+ const signingMandate={chain:'base',address:BASE_SPOT.address,allowedContracts:[BASE_SPOT.router],maxAmountWei:value.toString(),expiresAt:new Date(Math.min(Date.parse(grant.valid_until),validation.deadline*1000,Date.parse(quote.observedAt)+60000)).toISOString(),unsignedTransactionHash:Transaction.from(transaction).unsignedHash};
+ return record({type:'BaseNativeUsdcRiskAdmission',signingMandate,preparation:id,quote:quote.id,grant:grant.id,principal:'561-group',address:BASE_SPOT.address,at,utcDay:marks.utcDay,sourceEvidence:marks.sourceEvidence,transactionRiskUsdMicros:transactionRisk.toString(),markedDayLossUsdMicros:markedLoss.toString(),reservedLossUsdMicros:reserved.toString(),signed:false,broadcast:false,currentAuthorityAndPendingNonceRecheckRequired:true});
+}
