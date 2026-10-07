@@ -22,7 +22,7 @@ export const BASE_SPOT = Object.freeze({
 });
 const gasOracleAddress='0x420000000000000000000000000000000000000F';
 const gasOracle=new Interface(['function baseFee() view returns(uint256)','function getL1FeeUpperBound(uint256 unsignedTxSize) view returns(uint256)','function getOperatorFee(uint256 gasUsed) view returns(uint256)']);
-const erc20=new Interface(['function balanceOf(address) view returns(uint256)']);
+const erc20=new Interface(['function balanceOf(address) view returns(uint256)','function decimals() view returns(uint8)']);
 const quoter=new Interface(['function quoteExactInputSingle((address tokenIn,address tokenOut,uint256 amountIn,uint24 fee,uint160 sqrtPriceLimitX96) params) returns(uint256 amountOut,uint160 sqrtPriceX96After,uint32 initializedTicksCrossed,uint256 gasEstimate)']);
 const router=new Interface(['function exactInputSingle((address tokenIn,address tokenOut,uint24 fee,address recipient,uint256 amountIn,uint256 amountOutMinimum,uint160 sqrtPriceLimitX96) params) payable returns(uint256 amountOut)','function multicall(uint256 deadline,bytes[] data) payable returns(bytes[] results)']);
 const integer=(value,label)=>{if(typeof value!=='string'||!/^\d+$/.test(value))throw new TypeError(label+'-exact-integer-required');return BigInt(value);};
@@ -51,7 +51,11 @@ export function createBaseSpotAdapter({readPool,clock=()=>new Date().toISOString
   const observedAt=clock();const reading=await readPool.requestAtBoundary({operation:async ctx=>{
    const balances={nativeBalanceWei:await call({method:'eth_getBalance',params:[BASE_SPOT.address]},ctx),usdcBalance:await call(balanceCall(BASE_SPOT.usdc),ctx),wrappedEtherBalance:await call(balanceCall(BASE_SPOT.wrappedEther),ctx),tokenBalances:[]};
    // Public calls only, four at a time, all pinned by the same upstream carrier.
-   for(let i=0;i<declared.length;i+=4){const batch=await Promise.allSettled(declared.slice(i,i+4).map(async token=>({token,balanceAtomic:erc20.decodeFunctionResult('balanceOf',await call(balanceCall(token),ctx))[0].toString()})));
+   for(let i=0;i<declared.length;i+=4){const batch=await Promise.allSettled(declared.slice(i,i+4).map(async token=>{
+     const balanceAtomic=erc20.decodeFunctionResult('balanceOf',await call(balanceCall(token),ctx))[0].toString();
+     try{const decimals=Number(erc20.decodeFunctionResult('decimals',await call({method:'eth_call',params:[{to:token,data:erc20.encodeFunctionData('decimals',[])}]},ctx))[0]);return {token,balanceAtomic,decimals,decimalsStatus:'observed'};}
+     catch(error){if(['PUBLIC_EVM_PROVIDER_READ_FAILED','PUBLIC_EVM_READ_LIMIT'].includes(error?.code))throw error;return {token,balanceAtomic,decimals:null,decimalsStatus:'refused',decimalsReason:error.message};}
+    }));
     const providerFailure=batch.find(result=>result.status==='rejected'&&['PUBLIC_EVM_PROVIDER_READ_FAILED','PUBLIC_EVM_READ_LIMIT'].includes(result.reason?.code));
     if(providerFailure)throw providerFailure.reason;
     batch.forEach((result,j)=>balances.tokenBalances.push(result.status==='fulfilled'?{...result.value,status:'observed'}:{token:declared[i+j],status:'refused',reason:result.reason.message}));
