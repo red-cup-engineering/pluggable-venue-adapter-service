@@ -90,3 +90,10 @@ test('Base quote requests finalized state and retains the reader finality witnes
  assert.deepEqual(tags,['finalized']);assert.equal(quote.finalized,true);assert.equal(quote.finality,'finalized');assert.deepEqual(quote.finalityEvidence,witness);
  const old=await fixture();assert.equal(old.quote.finalized,false);
 });
+
+test('declared token balances share the account boundary and remain explicitly partial and unvalued',async()=>{
+ const erc20=new Interface(['function balanceOf(address) view returns(uint256)']);const extra='0x1111111111111111111111111111111111111111',bad='0x2222222222222222222222222222222222222222';let boundaries=0;const calls=[];
+ const pool={chain:{id:8453},requestAtBoundary:async({operation})=>{boundaries++;return {boundary:{chainId:8453,blockNumber:'10',blockHash:'0x'+'ab'.repeat(32)},provider:{id:'fixture'},attempts:[],failures:[],value:await operation({request:async request=>{calls.push(request);if(request.method==='eth_getBalance')return '0x64';if(request.params[0].to===bad)throw new Error('token contract refused');return erc20.encodeFunctionResult('balanceOf',[request.params[0].to===extra?123456789012345678901n:1n]);}})};}};
+ const adapter=createBaseSpotAdapter({readPool:pool,clock:()=>at});const row=await adapter.readAccount({tokens:[bad,extra]});assert.equal(boundaries,1);assert.equal(row.tokenBalances[0].balanceAtomic,'123456789012345678901');assert.equal(row.tokenBalances[1].status,'refused');assert.equal(row.coverage.fullWallet,false);assert.equal(row.coverage.usdValuation,false);assert.equal(row.nativeBalanceWei,'100');assert.equal(calls.filter(c=>c.method==='eth_call').length,4);assert.ok(calls.every(c=>['eth_call','eth_getBalance'].includes(c.method)));
+ await assert.rejects(adapter.readAccount({tokens:[extra,extra]}),/unique/);await assert.rejects(adapter.readAccount({tokens:Array(129).fill(extra)}),/bounded/);await assert.rejects(adapter.readAccount({tokens:['not-an-address']}));assert.equal(boundaries,1);
+});
