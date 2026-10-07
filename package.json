@@ -3,7 +3,8 @@
     "@red-cup-engineering/computer-code-engineering-services-section": "workspace:*",
     "@red-cup-engineering/computer-content-engineering-services-section": "workspace:*",
     "@red-cup-engineering/mandate-portfolio-allocation-service": "workspace:*",
-    "ethers": "6.17.0"
+    "ethers": "6.17.0",
+    "@red-cup-engineering/account-evidence-reconciliation-service": "workspace:*"
   },
   "description": "pluggable-venue-adapter-service sovereign enterprise",
   "exports": {

@@ -1,3 +1,4 @@
+import {reconcileBaseNativeUsdc} from '@red-cup-engineering/account-evidence-reconciliation-service';
 import { Interface, Transaction, getAddress, keccak256 } from 'ethers';
 import { semanticIdOf } from '@red-cup-engineering/computer-content-engineering-services-section/semantic-content-identity';
 import { allocationsFor } from '@red-cup-engineering/mandate-portfolio-allocation-service/market-game';
@@ -223,4 +224,35 @@ export function createBaseNativeUsdcRecovery({directory,rpc,recordOutcome,clock}
  };
  const custody=createTransactionEffectCustody({directory,address:BASE_SPOT.address,chainId:8453,rpc:readOnlyRpc,recordOutcome,clock});
  return Object.freeze({reconcile:custody.reconcile});
+}
+
+/** Finalized receipt + adjacent block-hash-pinned account quantities. Read only.
+ * Failure or unrelated movements leave the existing effect in accounting custody. */
+export async function reconcileBaseNativeUsdcOutcome({observed,rpc}={}) {
+ if(observed?.chainId!==8453||!sameAddress(observed.address,BASE_SPOT.address)||typeof rpc!=='function')throw new TypeError('fixed-base-accounting-bindings-required');
+ const receipt=observed.receipt,number=BigInt(receipt.blockNumber);
+ if(number<=0n)throw new TypeError('accounting-parent-block-required');
+ const afterBlock=await rpc({method:'eth_getBlockByNumber',params:[receipt.blockNumber,false]});
+ if(afterBlock?.hash?.toLowerCase()!==receipt.blockHash.toLowerCase())throw new TypeError('accounting-canonical-block-required');
+ const beforeNumber='0x'+(number-1n).toString(16),beforeBlock=await rpc({method:'eth_getBlockByNumber',params:[beforeNumber,false]});
+ if(beforeBlock?.hash?.toLowerCase()!==afterBlock.parentHash.toLowerCase()||BigInt(beforeBlock.number)!==number-1n)throw new TypeError('accounting-canonical-parent-required');
+ const read=async block=>{
+  const boundary={blockHash:block.hash,requireCanonical:true};
+  const [native,usdc,weth]=await Promise.all([
+   rpc({method:'eth_getBalance',params:[BASE_SPOT.address,boundary]}),
+   rpc({method:'eth_call',params:[{to:BASE_SPOT.usdc,data:erc20.encodeFunctionData('balanceOf',[BASE_SPOT.address])},boundary]}),
+   rpc({method:'eth_call',params:[{to:BASE_SPOT.wrappedEther,data:erc20.encodeFunctionData('balanceOf',[BASE_SPOT.address])},boundary]}),
+  ]);
+  return {chainId:8453,address:BASE_SPOT.address,blockNumber:block.number,blockHash:block.hash,parentHash:block.parentHash,nativeBalanceWei:BigInt(native).toString(),usdcBalanceAtomic:erc20.decodeFunctionResult('balanceOf',usdc)[0].toString(),wrappedEtherBalanceWei:erc20.decodeFunctionResult('balanceOf',weth)[0].toString()};
+ };
+ const boundary={blockHash:afterBlock.hash,requireCanonical:true};
+ const [before,after,transaction,operatorRaw]=await Promise.all([
+  read(beforeBlock),read(afterBlock),rpc({method:'eth_getTransactionByHash',params:[observed.transactionHash]}),
+  rpc({method:'eth_call',params:[{to:gasOracleAddress,data:gasOracle.encodeFunctionData('getOperatorFee',[BigInt(receipt.gasUsed)])},boundary]}),
+ ]);
+ const operatorFeeWei=gasOracle.decodeFunctionResult('getOperatorFee',operatorRaw)[0].toString();
+ const finalized=await rpc({method:'eth_getBlockByNumber',params:['finalized',false]});
+ const canonical=await rpc({method:'eth_getBlockByNumber',params:[receipt.blockNumber,false]});
+ if(BigInt(finalized.number)<number||canonical.hash.toLowerCase()!==afterBlock.hash.toLowerCase())throw new TypeError('accounting-finalized-canonical-recheck-required');
+ return reconcileBaseNativeUsdc({observed,transaction,before,after,operatorFeeWei});
 }
