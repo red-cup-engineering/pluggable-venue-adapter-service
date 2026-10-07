@@ -75,3 +75,18 @@ test('Base admission includes gas in exact USD caps and aggregate marked-day los
  assert.throws(()=>admit({marks:{...marks,nativeUsdPerEth:'2500.0000001'}}),/exact-usd/);
  assert.throws(()=>admit({preparation:{...preparation,feeReserveWei:'0'}}),/exact-base-execution/);
 });
+
+
+test('Base quote requests finalized state and retains the reader finality witness',async()=>{
+ const tags=[];const witness={finalized:true,headNumber:'10',headHash:'0x'+'ab'.repeat(32)};
+ const readPool={chain:{id:8453},requestAtBoundary:async({blockTag,operation})=>{
+  tags.push(blockTag);return {boundary:{chainId:8453,blockNumber:'10',blockHash:witness.headHash},provider:{id:'fixture'},attempts:[],failures:[],finality:witness,value:await operation({request:async request=>{
+   if(request.method==='eth_getBalance')return '0x16bcc41e90000';
+   if(request.method==='eth_getCode')return '0x6000';
+   return quoter.encodeFunctionResult('quoteExactInputSingle',[250000n,1n,0,80000n]);
+  }})};
+ }};
+ const quote=await createBaseSpotAdapter({readPool,clock:()=>at}).quoteNativeToUsdc({amountInWei:'100000000000000'});
+ assert.deepEqual(tags,['finalized']);assert.equal(quote.finalized,true);assert.equal(quote.finality,'finalized');assert.deepEqual(quote.finalityEvidence,witness);
+ const old=await fixture();assert.equal(old.quote.finalized,false);
+});
