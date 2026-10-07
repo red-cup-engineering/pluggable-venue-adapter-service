@@ -206,7 +206,10 @@ export function createBaseNativeUsdcExecutor({directory,resolveExecutionRecords,
  }
  async function execute(request){
   if(!request||Object.keys(request).some(key=>!['quoteReference','preparationReference','decisionReference'].includes(key)))throw new TypeError('base-execution-reference-only-request-required');
-  const references=Object.freeze(Object.fromEntries(['quoteReference','preparationReference','decisionReference'].map(key=>[key,reference(request[key])])));
+  const references=Object.freeze(Object.fromEntries(['quoteReference','preparationReference','decisionReference'].map(key=>{
+   if(key==='decisionReference'){if(typeof request[key]!=='string'||! /^[a-f0-9]{64}$/.test(request[key]))throw new TypeError('content-addressed-market-decision-reference-required');return [key,request[key]];}
+   return [key,reference(request[key])];
+  })));
   const executionId=identify({type:'BaseNativeUsdcExecution',...references});
   return custody.execute({executionId,prepareSigned:async()=>{
    let records=await resolve(references);await recheckNetwork(records);
