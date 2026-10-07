@@ -1,5 +1,7 @@
 import { Interface, Transaction, getAddress, keccak256 } from 'ethers';
 import { semanticIdOf } from '@red-cup-engineering/computer-content-engineering-services-section/semantic-content-identity';
+import { allocationsFor } from '@red-cup-engineering/mandate-portfolio-allocation-service/market-game';
+import { createTransactionEffectCustody } from './transaction-effect-custody.mjs';
 const identify = semanticIdOf('brokerage.base-spot.record');
 export const BASE_SPOT = Object.freeze({
  chainId:8453,address:'0x224C08A8526751887a83e2711B167f890c6D078d',
@@ -17,7 +19,8 @@ const quoter=new Interface(['function quoteExactInputSingle((address tokenIn,add
 const router=new Interface(['function exactInputSingle((address tokenIn,address tokenOut,uint24 fee,address recipient,uint256 amountIn,uint256 amountOutMinimum,uint160 sqrtPriceLimitX96) params) payable returns(uint256 amountOut)','function multicall(uint256 deadline,bytes[] data) payable returns(bytes[] results)']);
 const integer=(value,label)=>{if(typeof value!=='string'||!/^\d+$/.test(value))throw new TypeError(label+'-exact-integer-required');return BigInt(value);};
 const positive=(value,label)=>{const n=integer(value,label);if(n<=0n)throw new RangeError(label+'-positive-required');return n;};
-const record=body=>Object.freeze({id:identify(body),...body});
+const freezeRecord=value=>{if(value&&typeof value==='object'){for(const child of Object.values(value))freezeRecord(child);Object.freeze(value);}return value;};
+const record=body=>freezeRecord({id:identify(body),...structuredClone(body)});
 const sameAddress=(a,b)=>getAddress(a)===getAddress(b);
 function currentQuote(quote,at){
  if(!quote||quote.type!=='BaseNativeUsdcQuote'||quote.chainId!==BASE_SPOT.chainId||quote.protocol!==BASE_SPOT.protocol)throw new TypeError('base-native-usdc-quote-required');
@@ -151,4 +154,73 @@ export function admitNativeUsdcExecution({quote,preparation,grant,revocation,mar
  const {from,...transaction}=body.transaction;
  const signingMandate={chain:'base',address:BASE_SPOT.address,allowedContracts:[BASE_SPOT.router],maxAmountWei:value.toString(),expiresAt:new Date(Math.min(Date.parse(grant.valid_until),validation.deadline*1000,Date.parse(quote.observedAt)+60000)).toISOString(),unsignedTransactionHash:Transaction.from(transaction).unsignedHash};
  return record({type:'BaseNativeUsdcRiskAdmission',signingMandate,preparation:id,quote:quote.id,grant:grant.id,principal:'561-group',address:BASE_SPOT.address,at,utcDay:marks.utcDay,sourceEvidence:marks.sourceEvidence,transactionRiskUsdMicros:transactionRisk.toString(),markedDayLossUsdMicros:markedLoss.toString(),reservedLossUsdMicros:reserved.toString(),signed:false,broadcast:false,currentAuthorityAndPendingNonceRecheckRequired:true});
+}
+
+/** The sole native-ETH/USDC effect path. All records and office authority come
+ * from the host's trusted resolver; request bodies contain references only.
+ * Custody and public observations remain upstream capabilities. */
+export function createBaseNativeUsdcExecutor({directory,resolveExecutionRecords,signTransaction,rpc,recordOutcome,clock=()=>new Date().toISOString()}={}){
+ if(typeof resolveExecutionRecords!=='function'||typeof signTransaction!=='function')throw new TypeError('trusted-base-execution-resolver-and-signer-required');
+ const custody=createTransactionEffectCustody({directory,address:BASE_SPOT.address,chainId:8453,rpc,recordOutcome,clock});
+ const reference=value=>{if(typeof value!=='string'||!/^ni:\/\/\/sha-256;[A-Za-z0-9_-]{43}$/.test(value))throw new TypeError('content-addressed-base-execution-reference-required');return value;};
+ // Decimal representation of a planner quantity, including scientific notation,
+ // rounded DOWN into funding atoms. Floating-point slack cannot authorize wei.
+ const fundingAtoms=value=>{
+  if(typeof value!=='number'||!Number.isFinite(value)||value<=0)throw new TypeError('positive-planned-eth-funding-required');
+  const [mantissa,exponent='0']=String(value).split('e'),[whole,fraction='']=mantissa.split('.');
+  const coefficient=BigInt(whole+fraction),shift=18+Number(exponent)-fraction.length;
+  return shift>=0?coefficient*10n**BigInt(shift):coefficient/10n**BigInt(-shift);
+ };
+ async function resolve(references){
+  const records=structuredClone(await resolveExecutionRecords(references));
+  const {quote,preparation,decision,principalAuthorization}=records;
+  if(quote?.id!==references.quoteReference||preparation?.id!==references.preparationReference||decision?.id!==references.decisionReference)throw new TypeError('resolved-base-execution-reference-mismatch');
+  const at=clock(),age=Date.parse(at)-Date.parse(principalAuthorization?.observedAt);
+  if(!reference(principalAuthorization?.id)||principalAuthorization.authorized!==true||principalAuthorization.principal!=='561-group'||principalAuthorization.office!=='emsenn-personal-chief-financial-officer'||principalAuthorization.grant!==records.grant?.id||!Number.isFinite(age)||age<0||age>60000)throw new TypeError('current-base-principal-office-authorization-required');
+  const admission=admitNativeUsdcExecution({...records,at});
+  const allocations=allocationsFor(decision,{venue:'evm',instrument:'USDC',side:'long',chainId:8453,protocol:BASE_SPOT.protocol,at});
+  if(allocations.length!==1||allocations[0].id!==quote.id||allocations[0].blockHash!==quote.boundary.blockHash||allocations[0].funding?.instrument!=='ETH'||BigInt(preparation.transaction.value)>fundingAtoms(allocations[0].funding.units))throw new TypeError('exact-joint-decision-base-native-funding-required');
+  return freezeRecord({...records,admission});
+ }
+ async function recheckNetwork(records){
+  const {quote,preparation}=records;
+  const [block,code,nonce,chain]=await Promise.all([
+   rpc({method:'eth_getBlockByNumber',params:['0x'+BigInt(quote.boundary.blockNumber).toString(16),false]}),
+   rpc({method:'eth_getCode',params:[BASE_SPOT.router,'latest']}),
+   rpc({method:'eth_getTransactionCount',params:[BASE_SPOT.address,'pending']}),
+   rpc({method:'eth_chainId',params:[]}),
+  ]);
+  if(BigInt(chain)!==8453n||block?.hash?.toLowerCase()!==quote.boundary.blockHash.toLowerCase()||keccak256(code)!==quote.routerCodeHash)throw new TypeError('current-base-chain-quote-router-required');
+  if(BigInt(nonce)!==BigInt(preparation.transaction.nonce))throw new TypeError('base-pending-nonce-changed');
+ }
+ async function execute(request){
+  if(!request||Object.keys(request).some(key=>!['quoteReference','preparationReference','decisionReference'].includes(key)))throw new TypeError('base-execution-reference-only-request-required');
+  const references=Object.freeze(Object.fromEntries(['quoteReference','preparationReference','decisionReference'].map(key=>[key,reference(request[key])])));
+  const executionId=identify({type:'BaseNativeUsdcExecution',...references});
+  return custody.execute({executionId,prepareSigned:async()=>{
+   let records=await resolve(references);await recheckNetwork(records);
+   records=await resolve(references);
+   const result=await signTransaction({chain:'base',mandate:records.admission.signingMandate,payload:{contract:BASE_SPOT.router,valueWei:records.preparation.transaction.value,transaction:records.preparation.transaction},now:clock()});
+   if(result?.signed!==true)throw new TypeError('base-signing-refused');
+   const signed=Transaction.from(result.signature);
+   if(!signed.isSigned()||signed.from!==BASE_SPOT.address||signed.unsignedHash!==records.admission.signingMandate.unsignedTransactionHash)throw new TypeError('signed-base-transaction-differs-from-admission');
+   // Signing can take time. Re-resolve revocation and reservations, then recheck
+   // the actual pending nonce before signed bytes enter effect custody.
+   records=await resolve(references);await recheckNetwork(records);
+   if(signed.unsignedHash!==records.admission.signingMandate.unsignedTransactionHash)throw new TypeError('base-admission-changed-during-signing');
+   return {serializedTransaction:signed.serialized,expiresAt:records.admission.signingMandate.expiresAt,evidence:{...references,admission:records.admission.id,principalAuthorization:records.principalAuthorization.id,grant:records.grant.id,sourceEvidence:records.admission.sourceEvidence}};
+  }});
+ }
+ return Object.freeze({execute,reconcile:custody.reconcile});
+}
+
+/** Recovery has no signing or broadcast surface. Observation can record a
+ * finalized receipt while financial accounting is still explicitly pending. */
+export function createBaseNativeUsdcRecovery({directory,rpc,recordOutcome,clock}={}){
+ const readOnlyRpc=request=>{
+  if(!['eth_getTransactionReceipt','eth_getBlockByNumber'].includes(request.method))throw new TypeError('base-recovery-read-only-rpc-required');
+  return rpc(request);
+ };
+ const custody=createTransactionEffectCustody({directory,address:BASE_SPOT.address,chainId:8453,rpc:readOnlyRpc,recordOutcome,clock});
+ return Object.freeze({reconcile:custody.reconcile});
 }

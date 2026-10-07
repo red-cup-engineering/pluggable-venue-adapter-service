@@ -60,6 +60,8 @@ test('Base admission includes gas in exact USD caps and aggregate marked-day los
  const {quote,prepare}=await preparationFixture();const preparation=await prepare();
  const admit=changes=>admitNativeUsdcExecution({quote,preparation,grant,revocation,marks,at,...changes});
  const result=admit({});assert.equal(result.signed,false);assert.equal(result.broadcast,false);assert.equal(result.currentAuthorityAndPendingNonceRecheckRequired,true);
+ assert.throws(()=>{result.signingMandate.allowedContracts.push(BASE_SPOT.usdc);},TypeError);
+ assert.throws(()=>{result.sourceEvidence[0]='changed';},TypeError);
  assert.ok(BigInt(result.transactionRiskUsdMicros)>250000n);
  assert.throws(()=>admit({marks:{...marks,nativeUsdPerEth:'250000'}}),/25-usd/);
  assert.throws(()=>admit({marks:{...marks,currentEquityUsd:'50'}}),/50-usd/);
