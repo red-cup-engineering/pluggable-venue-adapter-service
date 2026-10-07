@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {Interface} from 'ethers';
-import {createBaseSpotAdapter,buildNativeUsdcSwap,validateNativeUsdcSwap,admitNativeUsdcExecution,BASE_SPOT} from '../src/base-spot-adapter.mjs';
+import {createBaseSpotAdapter,buildNativeUsdcSwap,validateNativeUsdcSwap,admitNativeUsdcExecution,createBaseNativeUsdcExecutor,BASE_SPOT} from '../src/base-spot-adapter.mjs';
 const at='2026-10-06T12:00:00Z';
 const quoter=new Interface(['function quoteExactInputSingle((address tokenIn,address tokenOut,uint256 amountIn,uint24 fee,uint160 sqrtPriceLimitX96) params) returns(uint256 amountOut,uint160 sqrtPriceX96After,uint32 initializedTicksCrossed,uint256 gasEstimate)']);
 async function fixture(){
@@ -103,4 +103,31 @@ test('provider failures escape token refusal handling so the upstream reader can
  const run=async(failing,operation)=>operation({request:async request=>{if(request.method==='eth_getBalance')return '0x01';if(failing&&request.params[0].to===extra)throw Object.assign(new Error('provider rate limit'),{code:'PUBLIC_EVM_PROVIDER_READ_FAILED'});return erc20.encodeFunctionResult('balanceOf',[7n]);}});
  const pool={chain:{id:8453},requestAtBoundary:async({operation})=>{let value;try{value=await run(true,operation);}catch(error){assert.equal(error.code,'PUBLIC_EVM_PROVIDER_READ_FAILED');retries++;value=await run(false,operation);}return {value,boundary:{chainId:8453,blockNumber:'10',blockHash:'0x'+'ab'.repeat(32)},provider:{id:'fallback'},attempts:[],failures:[]};}};
  const row=await createBaseSpotAdapter({readPool:pool,clock:()=>at}).readAccount({tokens:[extra]});assert.equal(retries,1);assert.equal(row.tokenBalances[0].status,'observed');assert.equal(row.provider.id,'fallback');
+});
+
+
+test('Base executor passes the real upstream signer mandate before refusing absent test custody', {skip:!process.env.BASE_SIGNER_MODULE}, async()=>{
+ const {signWithWallet}=await import(process.env.BASE_SIGNER_MODULE);
+ const {createRequire}=await import('node:module');const require=createRequire(import.meta.url);
+ const allocationRequire=createRequire(require.resolve('@red-cup-engineering/mandate-portfolio-allocation-service/market-game'));
+ const {hashPosition}=await import(allocationRequire.resolve('@red-cup-engineering/gaming/running/rules'));
+ const {mkdtemp,rm,readdir}=await import('node:fs/promises');const {tmpdir}=await import('node:os');const {join}=await import('node:path');
+ const directory=await mkdtemp(join(tmpdir(),'base-upstream-signer-'));let attempts=0,writes=0;
+ try{
+  const {quote,prepare}=await preparationFixture();const preparation=await prepare();
+  const body={type:'MarketGameDecision',principal:'561-group',at,horizon:'2026-10-07T12:00:00Z',effect:'intent-only',orders:[{id:quote.id,venue:'evm',instrument:'USDC',side:'long',chainId:8453,protocol:BASE_SPOT.protocol,blockHash:quote.boundary.blockHash,funding:{instrument:'ETH',units:0.0001}}]};
+  const decision={id:hashPosition(body),...body};
+  const principalAuthorization={id:'ni:///sha-256;'+'d'.repeat(43),authorized:true,principal:'561-group',office:'emsenn-personal-chief-financial-officer',grant:grant.id,observedAt:at};
+  const executor=createBaseNativeUsdcExecutor({directory,clock:()=>at,resolveExecutionRecords:async()=>({quote,preparation,decision,grant,revocation,marks,principalAuthorization}),rpc:async({method})=>{
+   if(method==='eth_getBlockByNumber')return {hash:quote.boundary.blockHash};
+   if(method==='eth_getCode')return '0x6000';if(method==='eth_getTransactionCount')return '0x7';if(method==='eth_chainId')return '0x2105';
+   writes++;throw Error('unexpected transaction effect');
+  },recordOutcome:async()=>{writes++;throw Error('unexpected outcome');},signTransaction:async input=>{
+   attempts++;const result=await signWithWallet({...input,custody:{kind:'test-no-custody'}});
+   assert.equal(result.signed,false);assert.match(result.reason,/custody kind test-no-custody cannot be derived/);
+   return result;
+  }});
+  await assert.rejects(executor.execute({quoteReference:quote.id,preparationReference:preparation.id,decisionReference:decision.id}),/base-signing-refused/);
+  assert.equal(attempts,1);assert.equal(writes,0);assert.equal((await readdir(directory)).includes('pending.json'),false);
+ }finally{await rm(directory,{recursive:true,force:true});}
 });

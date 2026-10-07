@@ -220,7 +220,7 @@ export function createBaseNativeUsdcExecutor({directory,resolveExecutionRecords,
   return custody.execute({executionId,prepareSigned:async()=>{
    let records=await resolve(references);await recheckNetwork(records);
    records=await resolve(references);
-   const result=await signTransaction({chain:'base',mandate:records.admission.signingMandate,payload:{contract:BASE_SPOT.router,valueWei:records.preparation.transaction.value,transaction:records.preparation.transaction},now:clock()});
+   const result=await signTransaction({chain:'base',mandate:records.admission.signingMandate,payload:{chain:'base',contract:BASE_SPOT.router,valueWei:records.preparation.transaction.value,transaction:records.preparation.transaction},now:clock()});
    if(result?.signed!==true)throw new TypeError('base-signing-refused');
    const signed=Transaction.from(result.signature);
    if(!signed.isSigned()||signed.from!==BASE_SPOT.address||signed.unsignedHash!==records.admission.signingMandate.unsignedTransactionHash)throw new TypeError('signed-base-transaction-differs-from-admission');
