@@ -5,6 +5,7 @@ import { allocationsFor } from '@red-cup-engineering/mandate-portfolio-allocatio
 import { createTransactionEffectCustody } from './transaction-effect-custody.mjs';
 const identify = semanticIdOf('brokerage.base-spot.record');
 export const BASE_SPOT = Object.freeze({
+ maximumObservedTokens:128,
  chainId:8453,address:'0x224C08A8526751887a83e2711B167f890c6D078d',
  wrappedEther:'0x4200000000000000000000000000000000000006',
  usdc:'0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
@@ -39,7 +40,7 @@ export function createBaseSpotAdapter({readPool,clock=()=>new Date().toISOString
  const call=async(request,{request:rpc})=>rpc(request);
  const balanceCall=(token)=>({method:'eth_call',params:[{to:token,data:erc20.encodeFunctionData('balanceOf',[BASE_SPOT.address])}]});
  async function readAccount({tokens=[]}={}){
-  if(!Array.isArray(tokens)||tokens.length>128||tokens.some(token=>typeof token!=='string'))throw new TypeError('bounded-base-token-addresses-required');
+  if(!Array.isArray(tokens)||tokens.length>BASE_SPOT.maximumObservedTokens||tokens.some(token=>typeof token!=='string'))throw new TypeError('bounded-base-token-addresses-required');
   const declared=tokens.map(getAddress).sort();if(new Set(declared).size!==declared.length)throw new TypeError('unique-base-token-addresses-required');
   const observedAt=clock();const reading=await readPool.requestAtBoundary({operation:async ctx=>{
    const balances={nativeBalanceWei:await call({method:'eth_getBalance',params:[BASE_SPOT.address]},ctx),usdcBalance:await call(balanceCall(BASE_SPOT.usdc),ctx),wrappedEtherBalance:await call(balanceCall(BASE_SPOT.wrappedEther),ctx),tokenBalances:[]};
