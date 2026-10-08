@@ -36,6 +36,10 @@ function currentQuote(quote,at){
  if(!sameAddress(quote.address,BASE_SPOT.address))throw new TypeError('authorized-base-wallet-required');
  const age=Date.parse(at)-Date.parse(quote.observedAt);
  if(!Number.isFinite(age)||age<0||age>60000)throw new RangeError('fresh-base-quote-required');
+ const timestamp=quote.boundary?.blockTimestamp;
+ if(typeof timestamp!=='string'||!/^\d{1,16}$/.test(timestamp))throw new TypeError('base-quote-block-timestamp-required');
+ const stateAge=BigInt(Math.floor(Date.parse(at)/1000))-BigInt(timestamp);
+ if(stateAge<0n||stateAge>60n)throw new RangeError('fresh-base-quote-market-state-required');
  positive(quote.amountInWei,'input');positive(quote.amountOutAtomic,'output');
 }
 
@@ -46,7 +50,7 @@ export function createBaseSpotAdapter({readPool,clock=()=>new Date().toISOString
  const call=async(request,{request:rpc})=>rpc(request);
  async function quoteNativeToUsdc({amountInWei,fee=500}={}){
   const amount=positive(amountInWei,'input');if(![100,500,3000,10000].includes(fee))throw new RangeError('uniswap-fee-tier-required');
-  const observedAt=clock();const reading=await readPool.requestAtBoundary({blockTag:'finalized',operation:async ctx=>({
+  const observedAt=clock();const reading=await readPool.requestAtBoundary({blockTag:'latest',operation:async ctx=>({
    nativeBalanceWei:await call({method:'eth_getBalance',params:[BASE_SPOT.address]},ctx),
    routerCode:await call({method:'eth_getCode',params:[BASE_SPOT.router]},ctx),
    quote:await call({method:'eth_call',params:[{to:BASE_SPOT.quoter,data:quoter.encodeFunctionData('quoteExactInputSingle',[[BASE_SPOT.wrappedEther,BASE_SPOT.usdc,amount,fee,0]])}]},ctx),
@@ -55,9 +59,10 @@ export function createBaseSpotAdapter({readPool,clock=()=>new Date().toISOString
   if(BigInt(reading.value.nativeBalanceWei)<amount)throw new RangeError('native-input-exceeds-observed-wallet-balance');
   const [amountOut,sqrtPriceX96After,initializedTicksCrossed,gasEstimate]=quoter.decodeFunctionResult('quoteExactInputSingle',reading.value.quote);
   if(amountOut<=0n)throw new RangeError('positive-pool-output-required');
-  return record({type:'BaseNativeUsdcQuote',chainId:8453,address:BASE_SPOT.address,protocol:BASE_SPOT.protocol,observedAt,finality:reading.finality?.finalized===true?'finalized':'pinned-block-not-finalized',finalized:reading.finality?.finalized===true,...(reading.finality?{finalityEvidence:reading.finality}:{}),boundary:reading.boundary,provider:reading.provider,
+  const quoted=record({type:'BaseNativeUsdcQuote',chainId:8453,address:BASE_SPOT.address,protocol:BASE_SPOT.protocol,observedAt,finality:reading.finality?.finalized===true?'finalized':'pinned-block-not-finalized',finalized:reading.finality?.finalized===true,...(reading.finality?{finalityEvidence:reading.finality}:{}),boundary:reading.boundary,provider:reading.provider,
    router:BASE_SPOT.router,routerCodeHash:keccak256(reading.value.routerCode),tokenIn:BASE_SPOT.wrappedEther,tokenOut:BASE_SPOT.usdc,fee,amountInWei:amount.toString(),amountOutAtomic:amountOut.toString(),nativeBalanceWei:BigInt(reading.value.nativeBalanceWei).toString(),
    sqrtPriceX96After:sqrtPriceX96After.toString(),initializedTicksCrossed:Number(initializedTicksCrossed),quoterGasEstimate:gasEstimate.toString(),sources:BASE_SPOT.sources,attempts:reading.attempts,failures:reading.failures});
+  currentQuote(quoted,clock());return quoted;
  }
  async function prepareNativeUsdcSwap({quote,minimumOutputAtomic,deadline}={}){
   const observedAt=clock();const transaction=buildNativeUsdcSwap({quote,minimumOutputAtomic,deadline,at:observedAt});

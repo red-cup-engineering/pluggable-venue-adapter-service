@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {Interface} from 'ethers';
-import {createBaseSpotAdapter,buildNativeUsdcSwap,validateNativeUsdcSwap,admitNativeUsdcExecution,createBaseNativeUsdcExecutor,BASE_SPOT} from '../src/base-spot-adapter.mjs';
+import {createBaseSpotAdapter,buildNativeUsdcSwap,validateNativeUsdcSwap,admitNativeUsdcExecution,createBaseNativeUsdcExecutor,baseSpotRecordId,BASE_SPOT} from '../src/base-spot-adapter.mjs';
 const at='2026-10-06T12:00:00Z';
 const quoter=new Interface(['function quoteExactInputSingle((address tokenIn,address tokenOut,uint256 amountIn,uint24 fee,uint160 sqrtPriceLimitX96) params) returns(uint256 amountOut,uint160 sqrtPriceX96After,uint32 initializedTicksCrossed,uint256 gasEstimate)']);
 async function fixture(){
- const calls=[];const pool={chain:{id:8453},requestAtBoundary:async({operation})=>({boundary:{chainId:8453,blockNumber:'10',blockHash:'0x'+'ab'.repeat(32)},provider:{id:'fixture'},attempts:[],failures:[],value:await operation({request:async request=>{calls.push(request);if(request.method==='eth_getBalance')return '0x16bcc41e90000';if(request.method==='eth_getCode')return '0x6000';return quoter.encodeFunctionResult('quoteExactInputSingle',[250000n,1n,0,80000n]);}})})};
+ const calls=[];const pool={chain:{id:8453},requestAtBoundary:async({operation})=>({boundary:{chainId:8453,blockNumber:'10',blockTimestamp:String(Date.parse(at)/1000),blockHash:'0x'+'ab'.repeat(32)},provider:{id:'fixture'},attempts:[],failures:[],value:await operation({request:async request=>{calls.push(request);if(request.method==='eth_getBalance')return '0x16bcc41e90000';if(request.method==='eth_getCode')return '0x6000';return quoter.encodeFunctionResult('quoteExactInputSingle',[250000n,1n,0,80000n]);}})})};
  const adapter=createBaseSpotAdapter({readPool:pool,clock:()=>at});const quote=await adapter.quoteNativeToUsdc({amountInWei:'100000000000000'});const transaction=buildNativeUsdcSwap({quote,minimumOutputAtomic:'249375',deadline:Math.floor(Date.parse(at)/1000)+30,at});return {calls,quote,transaction};
 }
 test('Base calldata binds native input, self recipient, pair, deadline and quoted slippage',async()=>{
@@ -25,7 +25,7 @@ test('multicall cannot smuggle another operation or an outbound recipient',async
 const oracle=new Interface(['function baseFee() view returns(uint256)','function getL1FeeUpperBound(uint256 unsignedTxSize) view returns(uint256)','function getOperatorFee(uint256 gasUsed) view returns(uint256)']);
 async function preparationFixture({balance=1000000000000000n,estimate=166384n,nonce=7n,changedCode=false}={}){
  const requests=[];let preparing=false;
- const pool={chain:{id:8453},requestAtBoundary:async({operation})=>({boundary:{chainId:8453,blockNumber:'10',blockHash:'0x'+'ab'.repeat(32)},provider:{id:'fixture'},attempts:[],failures:[],value:await operation({request:async request=>{
+ const pool={chain:{id:8453},requestAtBoundary:async({operation})=>({boundary:{chainId:8453,blockNumber:'10',blockTimestamp:String(Date.parse(at)/1000),blockHash:'0x'+'ab'.repeat(32)},provider:{id:'fixture'},attempts:[],failures:[],value:await operation({request:async request=>{
   requests.push(request);
   if(request.method==='eth_getBalance')return '0x'+balance.toString(16);
   if(request.method==='eth_getCode')return preparing&&changedCode?'0x6001':'0x6000';
@@ -77,17 +77,17 @@ test('Base admission includes gas in exact USD caps and aggregate marked-day los
 });
 
 
-test('Base quote requests finalized state and retains the reader finality witness',async()=>{
+test('Base quote requests current state and records the reader finality honestly',async()=>{
  const tags=[];const witness={finalized:true,headNumber:'10',headHash:'0x'+'ab'.repeat(32)};
  const readPool={chain:{id:8453},requestAtBoundary:async({blockTag,operation})=>{
-  tags.push(blockTag);return {boundary:{chainId:8453,blockNumber:'10',blockHash:witness.headHash},provider:{id:'fixture'},attempts:[],failures:[],finality:witness,value:await operation({request:async request=>{
+  tags.push(blockTag);return {boundary:{chainId:8453,blockNumber:'10',blockTimestamp:String(Date.parse(at)/1000),blockHash:witness.headHash},provider:{id:'fixture'},attempts:[],failures:[],finality:witness,value:await operation({request:async request=>{
    if(request.method==='eth_getBalance')return '0x16bcc41e90000';
    if(request.method==='eth_getCode')return '0x6000';
    return quoter.encodeFunctionResult('quoteExactInputSingle',[250000n,1n,0,80000n]);
   }})};
  }};
  const quote=await createBaseSpotAdapter({readPool,clock:()=>at}).quoteNativeToUsdc({amountInWei:'100000000000000'});
- assert.deepEqual(tags,['finalized']);assert.equal(quote.finalized,true);assert.equal(quote.finality,'finalized');assert.deepEqual(quote.finalityEvidence,witness);
+ assert.deepEqual(tags,['latest']);assert.equal(quote.finalized,true);assert.equal(quote.finality,'finalized');assert.deepEqual(quote.finalityEvidence,witness);
  const old=await fixture();assert.equal(old.quote.finalized,false);
 });
 
@@ -115,4 +115,13 @@ test('Base executor passes the real upstream signer mandate before refusing abse
   await assert.rejects(executor.execute({quoteReference:quote.id,preparationReference:preparation.id,decisionReference:decision.id}),/base-signing-refused/);
   assert.equal(attempts,1);assert.equal(writes,0);assert.equal((await readdir(directory)).includes('pending.json'),false);
  }finally{await rm(directory,{recursive:true,force:true});}
+});
+
+test('fresh retrieval cannot admit stale, missing or future market-state timestamps',async()=>{
+ const {quote}=await fixture();
+ for(const [timestamp,pattern] of [[String(Date.parse(at)/1000-61),/market-state/],[String(Date.parse(at)/1000+1),/market-state/],[null,/timestamp-required/]]){
+  const {id,...body}=quote;body.boundary={...body.boundary,blockTimestamp:timestamp};
+  const retained={id:baseSpotRecordId(body),...body};
+  assert.throws(()=>buildNativeUsdcSwap({quote:retained,minimumOutputAtomic:'249375',deadline:Date.parse(at)/1000+30,at}),pattern);
+ }
 });
