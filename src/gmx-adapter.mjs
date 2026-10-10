@@ -192,6 +192,50 @@ export function normalizeGmxAccount({ usdcAmount, positions = [], holdingsUsd = 
   return { cashCents, equityCents: cashCents + collateralCents + Math.round(holdingsUsd * 100), freeCashCents: cashCents, gasUsd: nativeUsd, positions: heldPositions };
 }
 
+/* ------------------------------------------------------------------ carry (funding and borrowing) */
+const YEAR_MS = 365 * 86_400_000;
+/** A GMX v2 rate: an annualized fraction in 30-decimal fixed point (REST /markets/info), as a JS number. */
+const annualRate = (raw, label) => {
+  if (raw === undefined || raw === null || raw === "") throw new TypeError(`gmx-${label}-required`);
+  return Number((BigInt(raw) * 10n ** 12n) / 10n ** 30n) / 1e12;
+};
+
+/**
+ * What holding a GMX v2 position costs a year, per unit of position size, from one /markets/info row.
+ * Units: the REST rates are ANNUALIZED fractions in 30-decimal fixed point (the reading the eth_defi GMX
+ * client documents, "fundingRateLong / 10^30, annualised"; read as per-second they are absurd, which is why the
+ * market-data collector left funding null). Signs: a positive funding rate is funding that side RECEIVES (the
+ * larger open-interest side pays the smaller), and borrowing is always paid. So a side's cost is
+ * borrowing - funding; negative is a net credit. The row's netRate fields are recorded, not used: in the
+ * recorded markets they equal funding + borrowing, which is no side's cost under that sign convention.
+ * @param {{fundingRateLong: string, fundingRateShort: string, borrowingRateLong: string, borrowingRateShort: string, netRateLong?: string, netRateShort?: string, name?: string}} market
+ */
+export function gmxMarketCarry(market) {
+  const funding = { long: annualRate(market?.fundingRateLong, "funding-rate-long"), short: annualRate(market?.fundingRateShort, "funding-rate-short") };
+  const borrowing = { long: annualRate(market?.borrowingRateLong, "borrowing-rate-long"), short: annualRate(market?.borrowingRateShort, "borrowing-rate-short") };
+  if (borrowing.long < 0 || borrowing.short < 0) throw new RangeError("gmx-borrowing-rate-negative");
+  return Object.freeze({
+    market: market.name ?? market.marketToken ?? null, unit: "annual fraction of position size", funding, borrowing,
+    annualCost: { long: borrowing.long - funding.long, short: borrowing.short - funding.short },
+    netRateReported: { long: market.netRateLong === undefined ? null : annualRate(market.netRateLong, "net-rate-long"), short: market.netRateShort === undefined ? null : annualRate(market.netRateShort, "net-rate-short") },
+  });
+}
+
+/**
+ * A GMX position's carry as the market game's quote fields: the cost of holding `side` at `leverage` (size /
+ * collateral) for `holdingMs`, as a fraction of the collateral (market-game `carryCostFraction`, which is
+ * nonnegative), and a net funding credit as its own fraction for the scenario payoff. It assumes today's rates
+ * hold over the period; GMX moves them with open interest, so the quote is only as fresh as its row.
+ */
+export function gmxQuoteCarry({ market, side, leverage, holdingMs }) {
+  if (!["long", "short"].includes(side)) throw new TypeError("gmx-side-required");
+  if (!(Number.isFinite(leverage) && leverage > 0)) throw new RangeError("gmx-leverage-required");
+  if (!(Number.isFinite(holdingMs) && holdingMs > 0)) throw new RangeError("gmx-holding-period-required");
+  const carry = gmxMarketCarry(market);
+  const fraction = carry.annualCost[side] * leverage * (holdingMs / YEAR_MS);
+  return Object.freeze({ side, leverage, holdingMs, annualCost: carry.annualCost[side], carryCostFraction: Math.max(0, fraction), fundingCreditFraction: Math.max(0, -fraction), carry });
+}
+
 /* ------------------------------------------------------------------ admission */
 function admit(grant, scope, operation, now, chainId) {
   rejectCredentials(operation);
