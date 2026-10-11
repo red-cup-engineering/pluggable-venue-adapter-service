@@ -28,7 +28,7 @@
  * 0x1675...A712 and SyntheticsReader 0xfA26...4184 ABIs on Arbiscan/Blockscout. A contract upgrade changes
  * shapes: the adapter pins the function signatures it encodes in `GMX_SIGNATURES`, and tests pin their selectors.
  */
-import { semanticIdOf } from "@red-cup-engineering/computer-content-engineering-services-section/semantic-content-identity";
+import { semanticIdOf } from "@red-cup-engineering/computer-content-address-engineering-services-section/semantic-content-identity";
 import { allocationFor, allocationsFor } from '@red-cup-engineering/mandate-portfolio-allocation-service/market-game';
 
 const semanticId = semanticIdOf("brokerage.pluggable-venue-adapter.record");
