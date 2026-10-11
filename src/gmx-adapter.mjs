@@ -75,12 +75,33 @@ export const selectorOf = (signature) => keccak256(signature).slice(0, 10);
 /* ------------------------------------------------------------------ minimal ABI coder: 'address' 'uintN' 'intN' 'bool' 'bytes32' 'bytes', {tuple:[...]}, {array:T} */
 const ZERO = "0x0000000000000000000000000000000000000000";
 const hex = (n) => BigInt.asUintN(256, BigInt(n)).toString(16).padStart(64, "0");
+const integer = (value) => {
+  if (typeof value === "number" && !Number.isSafeInteger(value)) throw new RangeError("abi-integer-unsafe-number");
+  return BigInt(value);
+};
+const fundedLegs = (legs) => legs.filter(([, amount]) => {
+  const quantity = integer(amount);
+  if (quantity < 0n) throw new RangeError("uint-negative");
+  return quantity > 0n;
+});
 const isDynamic = (type) => type === "bytes" || (typeof type === "object" && (type.array !== undefined || type.tuple.some(isDynamic)));
 const address = (value) => { if (!/^0x[0-9a-fA-F]{40}$/u.test(value ?? "")) throw new TypeError("evm-address-invalid"); return value.slice(2).toLowerCase().padStart(64, "0"); };
 function encodeOne(type, value) {
   if (type === "address") return address(value);
   if (type === "bool") return hex(value ? 1 : 0);
-  if (typeof type === "string" && /^u?int\d*$/u.test(type)) { const big = BigInt(value); if (type.startsWith("u") && big < 0n) throw new RangeError("uint-negative"); return hex(big); }
+  if (typeof type === "string" && /^u?int\d*$/u.test(type)) {
+    const unsigned = type.startsWith("u");
+    const width = type.slice(unsigned ? 4 : 3);
+    const bits = width === "" ? 256 : Number(width);
+    if (!Number.isInteger(bits) || bits < 8 || bits > 256 || bits % 8 !== 0 || (width !== "" && width !== String(bits))) throw new TypeError("abi-integer-width-invalid");
+    const big = integer(value);
+    if (unsigned && big < 0n) throw new RangeError("uint-negative");
+    const bound = 1n << BigInt(unsigned ? bits : bits - 1);
+    if (big >= bound || (!unsigned && big < -bound)) throw new RangeError("abi-integer-out-of-range");
+    // Only sign-extend a value after proving it fits the declared ABI type.
+    // BigInt.asUintN in hex() otherwise silently wraps overflowing amounts.
+    return hex(big);
+  }
   if (type === "bytes32") { if (!/^0x[0-9a-fA-F]{64}$/u.test(value)) throw new TypeError("bytes32-invalid"); return value.slice(2).toLowerCase(); }
   if (type === "bytes") { const body = value.replace(/^0x/u, ""); return hex(body.length / 2) + body.padEnd(Math.ceil(body.length / 64) * 64, "0"); }
   if (type.array !== undefined) return hex(value.length) + encode(value.map(() => type.array), value);
@@ -292,15 +313,15 @@ export function createGmxAdapter({ chainId = 42161, rpc, fetchJson } = {}) {
   /** multicall([sendWnt(vault, fee), sendTokens(token, vault, amount)?, create(...)]) -> one unsigned transaction. */
   const bundle = ({ router, vault, executionFeeWei, token, amount, creation }) => {
     const calls = [call("sendWnt", ["address", "uint256"], [vault, executionFeeWei])];
-    if (token && BigInt(amount) > 0n) calls.push(call("sendTokens", ["address", "address", "uint256"], [token, vault, amount]));
+    if (token && integer(amount) > 0n) calls.push(call("sendTokens", ["address", "address", "uint256"], [token, vault, amount]));
     calls.push(creation);
-    return { to: router, value: `0x${BigInt(executionFeeWei).toString(16)}`, data: call("multicall", [{ array: "bytes" }], [calls]) };
+    return { to: router, value: `0x${integer(executionFeeWei).toString(16)}`, data: call("multicall", [{ array: "bytes" }], [calls]) };
   };
   const approvalFor = async (grant, token, amount, spender) => {
     const current = await allowanceOf(token, grant.account, spender);
-    return current >= BigInt(amount) ? [] : [{ type: "erc20-approve", token, spender, amount: BigInt(amount).toString(), currentAllowance: current.toString(), transaction: { chainId, from: grant.account, to: token, value: "0x0", data: call("approve", ["address", "uint256"], [spender, amount]) } }];
+    return current >= integer(amount) ? [] : [{ type: "erc20-approve", token, spender, amount: integer(amount).toString(), currentAllowance: current.toString(), transaction: { chainId, from: grant.account, to: token, value: "0x0", data: call("approve", ["address", "uint256"], [spender, amount]) } }];
   };
-  const requireFee = (fee) => { if (!(BigInt(fee) > 0n)) throw new RangeError("execution-fee-required"); return BigInt(fee); };
+  const requireFee = (fee) => { if (!(integer(fee) > 0n)) throw new RangeError("execution-fee-required"); return integer(fee); };
 
   return Object.freeze({
     chain,
@@ -328,10 +349,10 @@ export function createGmxAdapter({ chainId = 42161, rpc, fetchJson } = {}) {
       if (typeof order.isLong !== "boolean" || !/^0x[0-9a-fA-F]{40}$/u.test(order.market ?? "")) throw new TypeError("gmx-order-market-and-side-required");
       const increasing = type === ORDER_TYPE.MarketIncrease || type === ORDER_TYPE.LimitIncrease;
       const fee = requireFee(order.executionFeeWei);
-      const size = BigInt(order.sizeDeltaUsd);
+      const size = integer(order.sizeDeltaUsd);
       if (increasing) {
         if (marketDecision && Math.ceil(Number(order.collateralUsd) * 100 - 1e-9) > allocationFor(marketDecision, { venue: 'evm', principal: grant.principal, instrument: order.market, side: order.isLong ? 'long' : 'short', chainId, protocol: 'gmx', at: now })) throw new RangeError('gmx-collateral-exceeds-shared-market-allocation');
-        if (!(BigInt(order.collateralAmount) > 0n) || !(Number(order.collateralUsd) > 0)) throw new RangeError("gmx-collateral-required");
+        if (!(integer(order.collateralAmount) > 0n) || !(Number(order.collateralUsd) > 0)) throw new RangeError("gmx-collateral-required");
         const leverage = e30ToUsd(size) / Number(order.collateralUsd);
         if (marketDecision) {
           const funded = allocationsFor(marketDecision, { venue: 'evm', principal: grant.principal, instrument: order.market, side: order.isLong ? 'long' : 'short', chainId, protocol: 'gmx', at: now });
@@ -342,7 +363,7 @@ export function createGmxAdapter({ chainId = 42161, rpc, fetchJson } = {}) {
         if (leverage > maxLeverage + 1e-9) throw new RangeError(`order-leverage-exceeds-grant-limit:${leverage}>${maxLeverage}`);
       }
       const params = [[grant.account, grant.account, ZERO, ZERO, order.market, order.collateralToken, order.swapPath ?? []],
-        [size, increasing ? BigInt(order.collateralAmount) : BigInt(order.collateralAmount ?? 0), BigInt(order.triggerPriceE30 ?? 0), BigInt(order.acceptablePriceE30), fee, 0n, 0n, BigInt(order.validFromTime ?? 0)],
+        [size, increasing ? integer(order.collateralAmount) : integer(order.collateralAmount ?? 0), integer(order.triggerPriceE30 ?? 0), integer(order.acceptablePriceE30), fee, 0n, 0n, integer(order.validFromTime ?? 0)],
         type, 0, order.isLong, false, true, order.referralCode ?? `0x${"0".repeat(64)}`, []];
       const spend = increasing ? Number(order.collateralUsd) : Number(order.collateralUsd ?? order.sizeUsd ?? 0.01);
       const built = build({ grant, scope: "orders:build", kind: "perp-order", now, operation: { order }, run: () => ({ valueUsd: spend, approvals: [], notes: [], transactions: [{ chainId, from: grant.account, ...bundle({ router: chain.exchangeRouter, vault: chain.orderVault, executionFeeWei: fee, token: increasing ? order.collateralToken : null, amount: increasing ? order.collateralAmount : 0, creation: call("createOrder", [T_ORDER_PARAMS], [params]) }) }] }) });
@@ -356,8 +377,8 @@ export function createGmxAdapter({ chainId = 42161, rpc, fetchJson } = {}) {
     /** Build an UNSIGNED GM-pool deposit: `deposit` = {market, initialLongToken, initialShortToken, longAmount, shortAmount, valueUsd, minMarketTokens, executionFeeWei}. */
     buildGmDeposit: async ({ grant, deposit, now = new Date().toISOString() }) => {
       const fee = requireFee(deposit.executionFeeWei);
-      const params = [[grant.account, ZERO, ZERO, deposit.market, deposit.initialLongToken, deposit.initialShortToken, [], []], BigInt(deposit.minMarketTokens ?? 0), false, fee, 0n, []];
-      const legs = [[deposit.initialLongToken, deposit.longAmount ?? 0], [deposit.initialShortToken, deposit.shortAmount ?? 0]].filter(([, amount]) => BigInt(amount) > 0n);
+      const params = [[grant.account, ZERO, ZERO, deposit.market, deposit.initialLongToken, deposit.initialShortToken, [], []], integer(deposit.minMarketTokens ?? 0), false, fee, 0n, []];
+      const legs = fundedLegs([[deposit.initialLongToken, deposit.longAmount ?? 0], [deposit.initialShortToken, deposit.shortAmount ?? 0]]);
       if (legs.length === 0) throw new RangeError("gmx-deposit-amount-required");
       const built = build({ grant, scope: "deposits:build", kind: "gm-deposit", now, operation: { deposit }, run: () => {
         const calls = [call("sendWnt", ["address", "uint256"], [chain.depositVault, fee]), ...legs.map(([token, amount]) => call("sendTokens", ["address", "address", "uint256"], [token, chain.depositVault, amount])), call("createDeposit", [T_DEPOSIT_PARAMS], [params])];
@@ -370,8 +391,8 @@ export function createGmxAdapter({ chainId = 42161, rpc, fetchJson } = {}) {
     /** Build an UNSIGNED GLV deposit (GlvRouter): `deposit` = {glv, market, initialLongToken, initialShortToken, longAmount, shortAmount, valueUsd, minGlvTokens, executionFeeWei}. */
     buildGlvDeposit: async ({ grant, deposit, now = new Date().toISOString() }) => {
       const fee = requireFee(deposit.executionFeeWei);
-      const params = [[deposit.glv, deposit.market, grant.account, ZERO, ZERO, deposit.initialLongToken, deposit.initialShortToken, [], []], BigInt(deposit.minGlvTokens ?? 0), fee, 0n, false, false, []];
-      const legs = [[deposit.initialLongToken, deposit.longAmount ?? 0], [deposit.initialShortToken, deposit.shortAmount ?? 0]].filter(([, amount]) => BigInt(amount) > 0n);
+      const params = [[deposit.glv, deposit.market, grant.account, ZERO, ZERO, deposit.initialLongToken, deposit.initialShortToken, [], []], integer(deposit.minGlvTokens ?? 0), fee, 0n, false, false, []];
+      const legs = fundedLegs([[deposit.initialLongToken, deposit.longAmount ?? 0], [deposit.initialShortToken, deposit.shortAmount ?? 0]]);
       if (legs.length === 0) throw new RangeError("gmx-deposit-amount-required");
       const built = build({ grant, scope: "deposits:build", kind: "glv-deposit", now, operation: { deposit }, run: () => {
         const calls = [call("sendWnt", ["address", "uint256"], [chain.glvVault, fee]), ...legs.map(([token, amount]) => call("sendTokens", ["address", "address", "uint256"], [token, chain.glvVault, amount])), call("createGlvDeposit", [T_GLV_DEPOSIT_PARAMS], [params])];
@@ -384,8 +405,8 @@ export function createGmxAdapter({ chainId = 42161, rpc, fetchJson } = {}) {
     /** Build an UNSIGNED GLV withdrawal: `withdrawal` = {glv, glvAmount, valueUsd, minLongTokenAmount, minShortTokenAmount, executionFeeWei}. */
     buildGlvWithdrawal: async ({ grant, withdrawal, now = new Date().toISOString() }) => {
       const fee = requireFee(withdrawal.executionFeeWei);
-      const params = [[grant.account, ZERO, ZERO, withdrawal.market, withdrawal.glv, [], []], BigInt(withdrawal.minLongTokenAmount ?? 0), BigInt(withdrawal.minShortTokenAmount ?? 0), false, fee, 0n, []];
-      if (!(BigInt(withdrawal.glvAmount) > 0n)) throw new RangeError("gmx-withdrawal-amount-required");
+      const params = [[grant.account, ZERO, ZERO, withdrawal.market, withdrawal.glv, [], []], integer(withdrawal.minLongTokenAmount ?? 0), integer(withdrawal.minShortTokenAmount ?? 0), false, fee, 0n, []];
+      if (!(integer(withdrawal.glvAmount) > 0n)) throw new RangeError("gmx-withdrawal-amount-required");
       const built = build({ grant, scope: "deposits:build", kind: "glv-withdrawal", now, operation: { withdrawal }, run: () => {
         const calls = [call("sendWnt", ["address", "uint256"], [chain.glvVault, fee]), call("sendTokens", ["address", "address", "uint256"], [withdrawal.glv, chain.glvVault, withdrawal.glvAmount]), call("createGlvWithdrawal", [T_GLV_WITHDRAWAL_PARAMS], [params])];
         return { valueUsd: Number(withdrawal.valueUsd), approvals: [], transactions: [{ chainId, from: grant.account, to: chain.glvRouter, value: `0x${fee.toString(16)}`, data: call("multicall", [{ array: "bytes" }], [calls]) }] };
