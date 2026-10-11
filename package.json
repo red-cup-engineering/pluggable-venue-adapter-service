@@ -12,7 +12,14 @@
     "./base-spot": "./src/base-spot-adapter.mjs",
     "./gmx": "./src/gmx-adapter.mjs",
     "./kalshi": "./src/kalshi-adapter.mjs",
-    "./src/alpaca-adapter.mjs": "./src/alpaca-adapter.mjs"
+    "./src/alpaca-adapter.mjs": "./src/alpaca-adapter.mjs",
+    "./gmx-contracts": "./data/gmx/contracts.mjs",
+    "./gmx-model": "./src/gmx/model.mjs",
+    "./gmx-market": "./src/gmx/market.mjs",
+    "./gmx-public-reader": "./src/gmx/public-reader.mjs",
+    "./gmx-wallet-observation": "./src/gmx/wallet-observation.mjs",
+    "./gmx-rewards": "./data/gmx/rewards.mjs",
+    "./gmx-fee-harvest": "./src/gmx/fee-harvest.mjs"
   },
   "files": [
     "src/",
