@@ -1,9 +1,9 @@
 {
   "dependencies": {
-    "@red-cup-engineering/computer-content-engineering-services-section": "workspace:*",
     "@red-cup-engineering/mandate-portfolio-allocation-service": "workspace:*",
     "ethers": "6.17.0",
-    "@red-cup-engineering/account-evidence-reconciliation-service": "workspace:*"
+    "@red-cup-engineering/account-evidence-reconciliation-service": "workspace:*",
+    "@red-cup-engineering/computer-content-address-engineering-services-section": "workspace:*"
   },
   "description": "pluggable-venue-adapter-service sovereign enterprise",
   "exports": {
