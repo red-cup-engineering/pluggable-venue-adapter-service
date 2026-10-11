@@ -1,6 +1,6 @@
 # GMX unsigned-plan integer values
 
-The GMX adapter's local ABI encoder must preserve the integer supplied to an
+The GMX adapter's shared ethers ABI codec with local integer admission must preserve the integer supplied to an
 unsigned transaction plan. An out-of-range amount, price, execution fee or
 minimum output must fail; it must never become a different on-chain value by
 wrapping modulo 2^256. This applies recursively inside tuples and arrays before
@@ -32,3 +32,28 @@ unsigned-plan golden tests must remain byte-identical for valid values.
 This contract concerns integer representation. It does not validate market
 quotes, change any mandate or grant, sign or broadcast a transaction, or claim
 that a venue or runtime has received the repaired source.
+
+## Capability ownership
+
+`data/gmx/contracts.mjs` and `data/gmx/rewards.mjs` own frozen deployment and ABI
+descriptions. `src/gmx/abi.mjs` applies the declared ethers codec and local exact
+integer admission. `model.mjs` and `market.mjs` own pure account and collector
+normalization. `public-reader.mjs`, `wallet-observation.mjs`, and
+`fee-harvest.mjs` own public transport and read preflights. `gmx-adapter.mjs`
+composes these under the existing authority-grant and unsigned-plan contract.
+
+The legacy Oracle `/markets/info` endpoint reports annualized E30 funding;
+positive funding denotes the side paying. Annual carry cost is borrowing plus
+funding. Hourly comparison divides the observed long-side annual cost by 8760,
+retaining both sides and raw evidence. Cached REST observations do not establish
+a fixed chain block or an execution-capacity guarantee.
+
+A fee preflight reads both accrued WETH fee trackers on one block, verifies the
+router's deployed route, simulates, obtains bounded gas, binds the exact unsigned
+transaction, and verifies the block's canonical identity. It acquires no key and
+sends nothing. The Personal custodian consumer remains a separate effect.
+
+Account position and order reads retain their bounded 0..100 range. A full page
+does not establish complete account coverage; wallet observations expose that
+limit as an unresolved read. Collector and Personal consumers use the published
+shared exports; historical record scripts are evidence rather than source owners.

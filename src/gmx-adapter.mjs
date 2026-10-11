@@ -26,7 +26,7 @@
  * (CreateOrderParams with `autoCancel`/`referralCode`/`dataList`, CreateDepositParams, CreateGlvDepositParams,
  * Position.Props with `pendingImpactAmount`) are the verified ExchangeRouter 0x7dE3...83f1, GlvRouter
  * 0x1675...A712 and SyntheticsReader 0xfA26...4184 ABIs on Arbiscan/Blockscout. A contract upgrade changes
- * shapes: the adapter pins the function signatures it encodes in `GMX_SIGNATURES`, and tests pin their selectors.
+ * shapes: the adapter pins the function signatures it encodes in `GMX_SIGNATURES`, and the shared ethers codec encodes them.
  */
 import { semanticIdOf } from "@red-cup-engineering/computer-content-address-engineering-services-section/semantic-content-identity";
 import { allocationFor, allocationsFor } from '@red-cup-engineering/mandate-portfolio-allocation-service/market-game';
@@ -41,221 +41,24 @@ const credentialField = (key) => { const normalized = String(key).toLowerCase().
 function rejectCredentials(value, seen = new Set()) { if (!value || typeof value !== "object" || seen.has(value)) return; seen.add(value); for (const [key, member] of Object.entries(value)) { if (credentialField(key)) throw new TypeError("credential-bearing-venue-request-refused"); rejectCredentials(member, seen); } }
 function clean(value, seen = new Set()) { if (typeof value === "bigint") return value.toString(); if (!value || typeof value !== "object") return value; if (seen.has(value)) return null; seen.add(value); if (Array.isArray(value)) return value.map((member) => clean(member, seen)); return Object.fromEntries(Object.entries(value).filter(([key]) => !credentialField(key)).map(([key, member]) => [key, clean(member, seen)])); }
 
-/* ------------------------------------------------------------------ keccak-256 (for selectors; node:crypto has only NIST SHA-3) */
-const MASK = (1n << 64n) - 1n;
-const ROUND_CONSTANTS = [0x0000000000000001n, 0x0000000000008082n, 0x800000000000808an, 0x8000000080008000n, 0x000000000000808bn, 0x0000000080000001n, 0x8000000080008081n, 0x8000000000008009n, 0x000000000000008an, 0x0000000000000088n, 0x0000000080008009n, 0x000000008000000an, 0x000000008000808bn, 0x800000000000008bn, 0x8000000000008089n, 0x8000000000008003n, 0x8000000000008002n, 0x8000000000000080n, 0x000000000000800an, 0x800000008000000an, 0x8000000080008081n, 0x8000000000008080n, 0x0000000080000001n, 0x8000000080008008n];
-const ROTATION = [[0, 36, 3, 41, 18], [1, 44, 10, 45, 2], [62, 6, 43, 15, 61], [28, 55, 25, 21, 56], [27, 20, 39, 8, 14]];
-const rotl = (value, shift) => (shift === 0 ? value : ((value << BigInt(shift)) | (value >> BigInt(64 - shift))) & MASK);
-function keccakF(state) {
-  for (let round = 0; round < 24; round += 1) {
-    const column = Array.from({ length: 5 }, (_, x) => state[x] ^ state[x + 5] ^ state[x + 10] ^ state[x + 15] ^ state[x + 20]);
-    for (let x = 0; x < 5; x += 1) { const d = column[(x + 4) % 5] ^ rotl(column[(x + 1) % 5], 1); for (let y = 0; y < 5; y += 1) state[x + 5 * y] ^= d; }
-    const next = new Array(25).fill(0n);
-    for (let x = 0; x < 5; x += 1) for (let y = 0; y < 5; y += 1) next[y + 5 * ((2 * x + 3 * y) % 5)] = rotl(state[x + 5 * y], ROTATION[x][y]);
-    for (let x = 0; x < 5; x += 1) for (let y = 0; y < 5; y += 1) state[x + 5 * y] = next[x + 5 * y] ^ (~next[((x + 1) % 5) + 5 * y] & MASK & next[((x + 2) % 5) + 5 * y]);
-    state[0] ^= ROUND_CONSTANTS[round];
-  }
-}
-export function keccak256(input) {
-  const bytes = typeof input === "string" ? new TextEncoder().encode(input) : Uint8Array.from(input);
-  const rate = 136;
-  const padded = new Uint8Array(Math.ceil((bytes.length + 1) / rate) * rate);
-  padded.set(bytes); padded[bytes.length] ^= 0x01; padded[padded.length - 1] ^= 0x80;
-  const state = new Array(25).fill(0n);
-  for (let offset = 0; offset < padded.length; offset += rate) {
-    for (let lane = 0; lane < rate / 8; lane += 1) { let word = 0n; for (let b = 7; b >= 0; b -= 1) word = (word << 8n) | BigInt(padded[offset + lane * 8 + b]); state[lane] ^= word; }
-    keccakF(state);
-  }
-  let hex = "";
-  for (let lane = 0; lane < 4; lane += 1) for (let b = 0; b < 8; b += 1) hex += Number((state[lane] >> BigInt(8 * b)) & 0xffn).toString(16).padStart(2, "0");
-  return `0x${hex}`;
-}
-export const selectorOf = (signature) => keccak256(signature).slice(0, 10);
-
-/* ------------------------------------------------------------------ minimal ABI coder: 'address' 'uintN' 'intN' 'bool' 'bytes32' 'bytes', {tuple:[...]}, {array:T} */
+import { GMX_CHAINS, GMX_SIGNATURES, ORDER_TYPE, T_ORDER_PARAMS, T_DEPOSIT_PARAMS, T_GLV_DEPOSIT_PARAMS, T_GLV_WITHDRAWAL_PARAMS } from "../data/gmx/contracts.mjs";
+import { encode, integer, selectorOf } from "./gmx/abi.mjs";
+import { decodeAccountPositions, decodeAccountOrders, usdToE30 } from "./gmx/model.mjs";
+import { createGmxPublicReader } from "./gmx/public-reader.mjs";
+import { GMX_REWARDS } from "../data/gmx/rewards.mjs";
+import { Interface } from "ethers";
+export { GMX_CHAINS, GMX_SIGNATURES, ORDER_TYPE } from "../data/gmx/contracts.mjs";
+export { encode, decode, keccak256, selectorOf } from "./gmx/abi.mjs";
+export { decodeAccountPositions, decodeAccountOrders, normalizeGmxAccount, usdToE30, e30ToUsd, gmxMarketCarry, gmxQuoteCarry } from "./gmx/model.mjs";
 const ZERO = "0x0000000000000000000000000000000000000000";
-const hex = (n) => BigInt.asUintN(256, BigInt(n)).toString(16).padStart(64, "0");
-const integer = (value) => {
-  if (typeof value === "number" && !Number.isSafeInteger(value)) throw new RangeError("abi-integer-unsafe-number");
-  return BigInt(value);
-};
+const SELECTOR = Object.fromEntries(Object.entries(GMX_SIGNATURES).filter(([name]) => name !== "gasPrice").map(([name, signature]) => [name, selectorOf(signature)]));
+export const GMX_SELECTORS = Object.freeze({ ...SELECTOR });
+const call = (name, types, values) => `${SELECTOR[name]}${encode(types, values)}`;
 const fundedLegs = (legs) => legs.filter(([, amount]) => {
   const quantity = integer(amount);
   if (quantity < 0n) throw new RangeError("uint-negative");
   return quantity > 0n;
 });
-const isDynamic = (type) => type === "bytes" || (typeof type === "object" && (type.array !== undefined || type.tuple.some(isDynamic)));
-const address = (value) => { if (!/^0x[0-9a-fA-F]{40}$/u.test(value ?? "")) throw new TypeError("evm-address-invalid"); return value.slice(2).toLowerCase().padStart(64, "0"); };
-function encodeOne(type, value) {
-  if (type === "address") return address(value);
-  if (type === "bool") return hex(value ? 1 : 0);
-  if (typeof type === "string" && /^u?int\d*$/u.test(type)) {
-    const unsigned = type.startsWith("u");
-    const width = type.slice(unsigned ? 4 : 3);
-    const bits = width === "" ? 256 : Number(width);
-    if (!Number.isInteger(bits) || bits < 8 || bits > 256 || bits % 8 !== 0 || (width !== "" && width !== String(bits))) throw new TypeError("abi-integer-width-invalid");
-    const big = integer(value);
-    if (unsigned && big < 0n) throw new RangeError("uint-negative");
-    const bound = 1n << BigInt(unsigned ? bits : bits - 1);
-    if (big >= bound || (!unsigned && big < -bound)) throw new RangeError("abi-integer-out-of-range");
-    // Only sign-extend a value after proving it fits the declared ABI type.
-    // BigInt.asUintN in hex() otherwise silently wraps overflowing amounts.
-    return hex(big);
-  }
-  if (type === "bytes32") { if (!/^0x[0-9a-fA-F]{64}$/u.test(value)) throw new TypeError("bytes32-invalid"); return value.slice(2).toLowerCase(); }
-  if (type === "bytes") { const body = value.replace(/^0x/u, ""); return hex(body.length / 2) + body.padEnd(Math.ceil(body.length / 64) * 64, "0"); }
-  if (type.array !== undefined) return hex(value.length) + encode(value.map(() => type.array), value);
-  return encode(type.tuple, Array.isArray(value) ? value : type.tuple.map((_, index) => value[index]));
-}
-export function encode(types, values) {
-  if (types.length !== values.length) throw new TypeError("abi-arity-mismatch");
-  let head = "", tail = "";
-  const headSize = types.reduce((sum, type) => sum + (isDynamic(type) ? 32 : staticWords(type) * 32), 0);
-  types.forEach((type, index) => {
-    const body = encodeOne(type, values[index]);
-    if (isDynamic(type)) { head += hex(headSize + tail.length / 2); tail += body; } else head += body;
-  });
-  return head + tail;
-}
-function staticWords(type) { return typeof type === "object" && type.tuple !== undefined ? type.tuple.reduce((sum, member) => sum + staticWords(member), 0) : 1; }
-function decodeOne(type, data, offset) {
-  const word = (at) => BigInt(`0x${data.slice(at * 2, at * 2 + 64)}`);
-  if (type === "address") return `0x${data.slice(offset * 2 + 24, offset * 2 + 64)}`;
-  if (type === "bool") return word(offset) !== 0n;
-  if (type === "bytes32") return `0x${data.slice(offset * 2, offset * 2 + 64)}`;
-  if (typeof type === "string" && type.startsWith("int")) return BigInt.asIntN(256, word(offset));
-  if (typeof type === "string") return word(offset);
-  if (type.array !== undefined) { const length = Number(word(offset)); const base = offset + 32; const stride = isDynamic(type.array) ? 32 : staticWords(type.array) * 32; return Array.from({ length }, (_, i) => (isDynamic(type.array) ? decodeOne(type.array, data, base + Number(word(base + i * stride))) : decodeOne(type.array, data, base + i * stride))); }
-  return decode(type.tuple, data, offset);
-}
-export function decode(types, data, start = 0) {
-  const body = data.replace(/^0x/u, "");
-  let cursor = start;
-  return types.map((type) => {
-    let value;
-    if (isDynamic(type)) value = decodeOne(type, body, start + Number(BigInt(`0x${body.slice(cursor * 2, cursor * 2 + 64)}`))), cursor += 32;
-    else value = decodeOne(type, body, cursor), cursor += staticWords(type) * 32;
-    return value;
-  });
-}
-
-/* ------------------------------------------------------------------ GMX contracts and function signatures */
-export const GMX_CHAINS = Object.freeze({
-  42161: Object.freeze({
-    name: "arbitrum", api: "https://arbitrum-api.gmxinfra.io",
-    dataStore: "0xFD70de6b91282D8017aA4E741e9Ae325CAb992d8", exchangeRouter: "0x7dE39FF2e232A2203196788d37e234cF8F1b83f1", router: "0x7452c558d45f8afC8c83dAe62C3f8A5BE19c71f6",
-    orderVault: "0x31eF83a530Fde1B38EE9A18093A333D8Bbbc40D5", depositVault: "0xF89e77e8Dc11691C9e8757e84aaFbCD8A67d7A55", withdrawalVault: "0x0628D46b5D145f183AdB6Ef1f2c97eD1C4701C55",
-    reader: "0xfA26cBb46e2614609406de08CA1Dc7f70a684184", glvRouter: "0x167540D2DFF14120365CfDDF2F86e3045D4fa712", glvVault: "0x393053B58f9678C9c28c2cE941fF6cac49C3F8f9",
-    wnt: "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1", usdc: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
-  }),
-  43114: Object.freeze({
-    name: "avalanche", api: "https://avalanche-api.gmxinfra.io",
-    dataStore: "0x2F0b22339414ADeD7D5F06f9D604c7fF5b2fe3f6", exchangeRouter: "0xc002Db96E682FFF6675966F959677285a0C45Efa", router: "0x820F5FfC5b525cD4d88Cd91aCf2c28F16530Cc68",
-    orderVault: "0xD3D60D22d415aD43b7e64b510D86A30f19B1B12C", depositVault: "0x90c670825d0C62ede1c5ee9571d6d9a17A722DFF", withdrawalVault: "0xf5F30B10141E1F63FC11eD772931A8294a591996",
-    reader: "0xa34320a507493C71Fe35E982e496F7C5d1a7fa02", glvRouter: "0x603B3D3aB077CA433b888c05fa59c777d5b6dCAD", glvVault: "0x527FB0bCfF63C47761039bB386cFE181A92a4701",
-    wnt: "0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7", usdc: "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E",
-  }),
-});
-const T_ORDER_PARAMS = { tuple: [{ tuple: ["address", "address", "address", "address", "address", "address", { array: "address" }] }, { tuple: ["uint256", "uint256", "uint256", "uint256", "uint256", "uint256", "uint256", "uint256"] }, "uint8", "uint8", "bool", "bool", "bool", "bytes32", { array: "bytes32" }] };
-const T_DEPOSIT_PARAMS = { tuple: [{ tuple: ["address", "address", "address", "address", "address", "address", { array: "address" }, { array: "address" }] }, "uint256", "bool", "uint256", "uint256", { array: "bytes32" }] };
-const T_GLV_DEPOSIT_PARAMS = { tuple: [{ tuple: ["address", "address", "address", "address", "address", "address", "address", { array: "address" }, { array: "address" }] }, "uint256", "uint256", "uint256", "bool", "bool", { array: "bytes32" }] };
-const T_GLV_WITHDRAWAL_PARAMS = { tuple: [{ tuple: ["address", "address", "address", "address", "address", { array: "address" }, { array: "address" }] }, "uint256", "uint256", "bool", "uint256", "uint256", { array: "bytes32" }] };
-export const GMX_SIGNATURES = Object.freeze({
-  multicall: "multicall(bytes[])", sendWnt: "sendWnt(address,uint256)", sendTokens: "sendTokens(address,address,uint256)",
-  createOrder: "createOrder(((address,address,address,address,address,address,address[]),(uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256),uint8,uint8,bool,bool,bool,bytes32,bytes32[]))",
-  createDeposit: "createDeposit(((address,address,address,address,address,address,address[],address[]),uint256,bool,uint256,uint256,bytes32[]))",
-  createGlvDeposit: "createGlvDeposit(((address,address,address,address,address,address,address,address[],address[]),uint256,uint256,uint256,bool,bool,bytes32[]))",
-  createGlvWithdrawal: "createGlvWithdrawal(((address,address,address,address,address,address[],address[]),uint256,uint256,bool,uint256,uint256,bytes32[]))",
-  getAccountPositions: "getAccountPositions(address,address,uint256,uint256)", getAccountOrders: "getAccountOrders(address,address,uint256,uint256)",
-  balanceOf: "balanceOf(address)", allowance: "allowance(address,address)", approve: "approve(address,uint256)", gasPrice: "eth_gasPrice",
-});
-const SELECTOR = Object.fromEntries(Object.entries(GMX_SIGNATURES).filter(([name]) => name !== "gasPrice").map(([name, signature]) => [name, selectorOf(signature)]));
-export const GMX_SELECTORS = Object.freeze({ ...SELECTOR });
-const call = (name, types, values) => `${SELECTOR[name]}${encode(types, values)}`;
-
-export const ORDER_TYPE = Object.freeze({ MarketSwap: 0, LimitSwap: 1, MarketIncrease: 2, LimitIncrease: 3, MarketDecrease: 4, LimitDecrease: 5, StopLossDecrease: 6 });
-const POSITION_TYPE = { tuple: [{ tuple: ["address", "address", "address"] }, { tuple: ["uint256", "uint256", "uint256", "int256", "uint256", "uint256", "uint256", "uint256", "uint256", "uint256"] }, { tuple: ["bool"] }] };
-const ORDER_PROPS_TYPE = { tuple: ["bytes32", { tuple: [{ tuple: ["address", "address", "address", "address", "address", "address", "address", { array: "address" }] }, { tuple: ["uint8", "uint8", "uint256", "uint256", "uint256", "uint256", "uint256", "uint256", "uint256", "uint256", "uint256", "uint256", "uint256"] }, { tuple: ["bool", "bool", "bool", "bool"] }, { array: "bytes32" }] }] };
-
-/** GMX 30-decimal USD fixed point <-> JS numbers (display/limit arithmetic only; calldata uses BigInt). */
-export const usdToE30 = (usd) => BigInt(Math.round(Number(usd) * 1e6)) * 10n ** 24n;
-export const e30ToUsd = (value) => Number(BigInt(value) / 10n ** 18n) / 1e12;
-
-/* ------------------------------------------------------------------ decoders for reads */
-export function decodeAccountPositions(result) {
-  const [rows] = decode([{ array: POSITION_TYPE }], result);
-  return rows.map(([addresses, numbers, flags]) => ({
-    account: addresses[0], market: addresses[1], collateralToken: addresses[2], sizeInUsdE30: numbers[0], sizeInTokens: numbers[1], collateralAmount: numbers[2], pendingImpactAmount: numbers[3],
-    borrowingFactor: numbers[4], increasedAtTime: Number(numbers[8]), decreasedAtTime: Number(numbers[9]), isLong: flags[0], sizeUsd: e30ToUsd(numbers[0]),
-  }));
-}
-export function decodeAccountOrders(result) {
-  const [rows] = decode([{ array: ORDER_PROPS_TYPE }], result);
-  return rows.map(([orderKey, [addresses, numbers, flags]]) => ({
-    orderKey, account: addresses[0], receiver: addresses[1], market: addresses[5], initialCollateralToken: addresses[6], swapPath: addresses[7],
-    orderType: Number(numbers[0]), sizeDeltaUsdE30: numbers[2], initialCollateralDeltaAmount: numbers[3], triggerPriceE30: numbers[4], acceptablePriceE30: numbers[5], executionFee: numbers[6],
-    updatedAtTime: Number(numbers[10]), isLong: flags[0], isFrozen: flags[2],
-  }));
-}
-
-/**
- * The account as one venue-neutral reading in cents, like normalizeKalshiAccount. Cash is the free stablecoin
- * (USDC) wallet balance; equity adds position collateral (at par for stablecoin collateral), GM/GLV/other
- * holdings at their stated USD value, and excludes native gas ETH (it is not tradable capital).
- * @param {{usdcAmount: number, positions: object[], holdingsUsd?: number, nativeUsd?: number}} reading
- */
-export function normalizeGmxAccount({ usdcAmount, positions = [], holdingsUsd = 0, nativeUsd = 0, stablecoins = [] } = {}) {
-  if (!Number.isFinite(usdcAmount)) throw new TypeError("gmx-usdc-balance-required");
-  const stable = new Set(stablecoins.map((a) => a.toLowerCase()));
-  const heldPositions = positions.filter((p) => p.sizeUsd > 0).map((p) => ({ market: p.market, side: p.isLong ? "long" : "short", sizeCents: Math.round(p.sizeUsd * 100), collateralToken: p.collateralToken, collateralCents: stable.has(p.collateralToken.toLowerCase()) ? Math.round((Number(p.collateralAmount) / 1e6) * 100) : null }));
-  const collateralCents = heldPositions.reduce((sum, p) => sum + (p.collateralCents ?? 0), 0);
-  const cashCents = Math.round(usdcAmount * 100);
-  return { cashCents, equityCents: cashCents + collateralCents + Math.round(holdingsUsd * 100), freeCashCents: cashCents, gasUsd: nativeUsd, positions: heldPositions };
-}
-
-/* ------------------------------------------------------------------ carry (funding and borrowing) */
-const YEAR_MS = 365 * 86_400_000;
-/** A GMX v2 rate: an annualized fraction in 30-decimal fixed point (REST /markets/info), as a JS number. */
-const annualRate = (raw, label) => {
-  if (raw === undefined || raw === null || raw === "") throw new TypeError(`gmx-${label}-required`);
-  return Number((BigInt(raw) * 10n ** 12n) / 10n ** 30n) / 1e12;
-};
-
-/**
- * What holding a GMX v2 position costs a year, per unit of position size, from one /markets/info row.
- * Units: the REST rates are ANNUALIZED fractions in 30-decimal fixed point (the reading the eth_defi GMX
- * client documents, "fundingRateLong / 10^30, annualised"; read as per-second they are absurd, which is why the
- * market-data collector left funding null). Signs: a positive funding rate is funding that side RECEIVES (the
- * larger open-interest side pays the smaller), and borrowing is always paid. So a side's cost is
- * borrowing - funding; negative is a net credit. The row's netRate fields are recorded, not used: in the
- * recorded markets they equal funding + borrowing, which is no side's cost under that sign convention.
- * @param {{fundingRateLong: string, fundingRateShort: string, borrowingRateLong: string, borrowingRateShort: string, netRateLong?: string, netRateShort?: string, name?: string}} market
- */
-export function gmxMarketCarry(market) {
-  const funding = { long: annualRate(market?.fundingRateLong, "funding-rate-long"), short: annualRate(market?.fundingRateShort, "funding-rate-short") };
-  const borrowing = { long: annualRate(market?.borrowingRateLong, "borrowing-rate-long"), short: annualRate(market?.borrowingRateShort, "borrowing-rate-short") };
-  if (borrowing.long < 0 || borrowing.short < 0) throw new RangeError("gmx-borrowing-rate-negative");
-  return Object.freeze({
-    market: market.name ?? market.marketToken ?? null, unit: "annual fraction of position size", funding, borrowing,
-    annualCost: { long: borrowing.long - funding.long, short: borrowing.short - funding.short },
-    netRateReported: { long: market.netRateLong === undefined ? null : annualRate(market.netRateLong, "net-rate-long"), short: market.netRateShort === undefined ? null : annualRate(market.netRateShort, "net-rate-short") },
-  });
-}
-
-/**
- * A GMX position's carry as the market game's quote fields: the cost of holding `side` at `leverage` (size /
- * collateral) for `holdingMs`, as a fraction of the collateral (market-game `carryCostFraction`, which is
- * nonnegative), and a net funding credit as its own fraction for the scenario payoff. It assumes today's rates
- * hold over the period; GMX moves them with open interest, so the quote is only as fresh as its row.
- */
-export function gmxQuoteCarry({ market, side, leverage, holdingMs }) {
-  if (!["long", "short"].includes(side)) throw new TypeError("gmx-side-required");
-  if (!(Number.isFinite(leverage) && leverage > 0)) throw new RangeError("gmx-leverage-required");
-  if (!(Number.isFinite(holdingMs) && holdingMs > 0)) throw new RangeError("gmx-holding-period-required");
-  const carry = gmxMarketCarry(market);
-  const fraction = carry.annualCost[side] * leverage * (holdingMs / YEAR_MS);
-  return Object.freeze({ side, leverage, holdingMs, annualCost: carry.annualCost[side], carryCostFraction: Math.max(0, fraction), fundingCreditFraction: Math.max(0, -fraction), carry });
-}
 
 /* ------------------------------------------------------------------ admission */
 function admit(grant, scope, operation, now, chainId) {
@@ -287,10 +90,10 @@ function enforceValue(grant, valueUsd) {
  *   rpc: public JSON-RPC, e.g. ({method, params}) => fetch(url, POST {jsonrpc, id, method, params}).then(r => r.json()).then(b => b.result).
  *   fetchJson: GET returning parsed JSON, used for GMX's public REST (markets/info, prices/tickers).
  */
-export function createGmxAdapter({ chainId = 42161, rpc, fetchJson } = {}) {
+export function createGmxAdapter({ chainId = 42161, rpc, fetchJson, blockTag = "latest" } = {}) {
   const chain = GMX_CHAINS[chainId];
   if (!chain || typeof rpc !== "function") throw new TypeError("gmx-adapter-configuration-invalid");
-  const ethCall = (to, data) => rpc({ method: "eth_call", params: [{ to, data }, "latest"] });
+  const ethCall = (to, data) => rpc({ method: "eth_call", params: [{ to, data }, blockTag] });
   const balanceOf = async (token, who) => BigInt(await ethCall(token, call("balanceOf", ["address"], [who])));
   const allowanceOf = async (token, owner, spender) => BigInt(await ethCall(token, call("allowance", ["address", "address"], [owner, spender])));
 
@@ -325,17 +128,27 @@ export function createGmxAdapter({ chainId = 42161, rpc, fetchJson } = {}) {
 
   return Object.freeze({
     chain,
+    /** Claim accrued v1 fees to the account. No token approval, deposit, swap, or staking. */
+    buildFeeClaim: ({ grant, valueUsd, now = new Date().toISOString() }) => {
+      const rewards = GMX_REWARDS[chainId];
+      if (!rewards) throw new RangeError("gmx-reward-deployment-unsupported");
+      const built = build({ grant, scope: "rewards:build", kind: "fee-claim", now, operation: { valueUsd }, run: () => ({
+        valueUsd, approvals: [], transactions: [{ chainId, from: grant.account, to: rewards.rewardRouter, value: "0x0",
+          data: new Interface(["function claimFees()"]).encodeFunctionData("claimFees") }],
+      }) });
+      return seal(grant, "rewards:build", "fee-claim", now, built);
+    },
     /** Native gas balance and the stablecoin/collateral token balances named in `tokens`. */
     readAccount: ({ grant, tokens = [chain.usdc, chain.wnt], now }) => read({ grant, scope: "account:read", method: "eth_getBalance+balanceOf", path: `eip155:${chainId}/${grant.account}`, now, operation: { tokens },
-      run: async () => ({ account: grant.account, nativeWei: BigInt(await rpc({ method: "eth_getBalance", params: [grant.account, "latest"] })).toString(), tokens: await Promise.all(tokens.map(async (token) => ({ token, raw: (await balanceOf(token, grant.account)).toString() }))) }) }),
+      run: async () => ({ account: grant.account, nativeWei: BigInt(await rpc({ method: "eth_getBalance", params: [grant.account, blockTag] })).toString(), tokens: await Promise.all(tokens.map(async (token) => ({ token, raw: (await balanceOf(token, grant.account)).toString() }))) }) }),
     listPositions: ({ grant, now }) => read({ grant, scope: "positions:read", method: "eth_call", path: `${chain.reader}#getAccountPositions`, now,
-      run: async () => ({ positions: decodeAccountPositions(await ethCall(chain.reader, call("getAccountPositions", ["address", "address", "uint256", "uint256"], [chain.dataStore, grant.account, 0, 100]))) }) }),
+      run: async () => { const positions = decodeAccountPositions(await ethCall(chain.reader, call("getAccountPositions", ["address", "address", "uint256", "uint256"], [chain.dataStore, grant.account, 0, 100]))); return { positions, range: { start: 0, end: 100, complete: positions.length < 100 } }; } }),
     listOrders: ({ grant, now }) => read({ grant, scope: "orders:read", method: "eth_call", path: `${chain.reader}#getAccountOrders`, now,
-      run: async () => ({ orders: decodeAccountOrders(await ethCall(chain.reader, call("getAccountOrders", ["address", "address", "uint256", "uint256"], [chain.dataStore, grant.account, 0, 100]))) }) }),
+      run: async () => { const orders = decodeAccountOrders(await ethCall(chain.reader, call("getAccountOrders", ["address", "address", "uint256", "uint256"], [chain.dataStore, grant.account, 0, 100]))); return { orders, range: { start: 0, end: 100, complete: orders.length < 100 } }; } }),
     /** GMX public REST: market list and oracle tickers, for sizing and mark values. */
     readMarkets: ({ grant, now }) => {
       if (typeof fetchJson !== "function") throw new TypeError("gmx-adapter-fetch-required");
-      return read({ grant, scope: "account:read", method: "GET", path: `${chain.api}/markets/info`, now, run: async () => ({ markets: (await fetchJson(`${chain.api}/markets/info`)).markets }) });
+      return read({ grant, scope: "account:read", method: "GET", path: `${chain.api}/markets/info`, now, run: async () => { const observed = await createGmxPublicReader({ chainId, fetchJson }).get("/markets/info"); return { markets: observed.body.markets, sourceEndpoint: observed.url }; } });
     },
 
     /**
