@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createKalshiAdapter, normalizeKalshiAccount } from "../src/kalshi-adapter.mjs";
+import { createKalshiAdapter, normalizeKalshiAccount, admitKalshiOrderUnderContract } from "../src/kalshi-adapter.mjs";
 
 const now = "2026-10-03T12:00:00Z";
 const contract = { type: "PrincipalBrokerageServiceContract", id: "urn:contract:kalshi-fixture", capital: { amount: 100, currency: "USD" }, risk: { maximumLossAmount: 100, maximumOrderNotional: 50, maximumAggregateNotional: 100, concentrationLimit: 1 } };
@@ -157,5 +157,55 @@ test("fills come with a reconciliation cursor", async () => {
 test("fractional positions and both resting sides retain their actual collateral",()=>{
  const account=normalizeKalshiAccount({balance:{balance:1000,portfolio_value:0},orders:[{order_id:'bid',ticker:'EVENT-X',book_side:'bid',yes_price_dollars:'0.025',remaining_count_fp:'10.50'},{order_id:'ask',ticker:'EVENT-Y',book_side:'ask',yes_price_dollars:'0.025',remaining_count_fp:'2.50'}]});
  assert.equal(account.resting[0].count,10.5);assert.equal(account.resting[0].priceCents,2.5);assert.equal(account.restingCollateralCents,271);assert.equal(account.freeCashCents,729);
- assert.throws(()=>normalizeKalshiAccount({balance:{balance:1000},positions:[{ticker:'EVENT-X',position_fp:'unknown',market_exposure_dollars:'1'}]}),/position-value-invalid/);
+ assert.throws(()=>normalizeKalshiAccount({balance:{balance:1000,portfolio_value:0},positions:[{ticker:'EVENT-X',position_fp:'unknown',market_exposure_dollars:'1'}]}),/position-value-invalid/);
+});
+
+
+test('malformed numerical risk mandates are rejected before any venue call',async()=>{
+ const order={ticker:'KXHIGHNY-26OCT04-T51',side:'ask',count:1,price:.03,clientOrderId:'blocked'};
+ for(const field of ['maximumLossAmount','maximumOrderNotional','maximumAggregateNotional','concentrationLimit']){
+  const incomplete={...contract,risk:{...contract.risk}};
+  delete incomplete.risk[field];
+  assert.throws(()=>admitKalshiOrderUnderContract({
+   contract:incomplete,account:{
+    equityCents:2800,freeCashCents:1000,positions:[],resting:[],
+   },order,
+  }),/required/);
+  const fixture=fakeClient();
+  const adapter=createKalshiAdapter({client:fixture.client});
+  await assert.rejects(adapter.placeOrder({grant,contract:incomplete,order,now}),/required/);
+  assert.equal(fixture.calls.length,0);
+ }
+});
+
+
+test('missing venue position, order or portfolio readings are not empty observations',async()=>{
+ const order={ticker:'KXHIGHNY-26OCT04-T51',side:'bid',count:1,price:.05,clientOrderId:'c'};
+ for(const missing of ['getPositions','getOrders']){
+  const fixture=fakeClient({[missing]:async()=>undefined});
+  await assert.rejects(createKalshiAdapter({client:fixture.client})
+   .preflightOrder({grant,contract,order,now}),/complete-current/);
+  assert.equal(fixture.calls.some(([name])=>name==='createOrder'),false);
+ }
+ const fixture=fakeClient({getBalance:async()=>({balance:2500})});
+ await assert.rejects(createKalshiAdapter({client:fixture.client})
+  .placeOrder({grant,contract,order,now}),/portfolio-value-required/);
+ assert.equal(fixture.calls.some(([name])=>name==='createOrder'),false);
+});
+test('exact fractional-cent collateral is retained through normalization and principal admission',()=>{
+ const account=normalizeKalshiAccount({
+  balance:{balance:1000,portfolio_value:0},positions:[],
+  orders:[{order_id:'q',ticker:'EVENT-1-A',book_side:'ask',
+    yes_price_dollars:'0.025',remaining_count_fp:'2.50'}],
+ });
+ assert.equal(account.restingCollateralCents,244);
+ assert.equal(account.resting[0].yesPriceDollars,'0.025');
+ assert.equal(account.resting[0].countDecimal,'2.50');
+ const limited={...contract,risk:{...contract.risk,maximumOrderNotional:'0.505'}};
+ const verdict=admitKalshiOrderUnderContract({
+  contract:limited,account:{...account,equityCents:10000},
+  order:{ticker:'EVENT-1-A',side:'ask',price:'0.495',count:'1'},
+ });
+ assert.equal(verdict.ok,false);
+ assert.match(verdict.reason,/order risk 51c above the contract's 50c/);
 });

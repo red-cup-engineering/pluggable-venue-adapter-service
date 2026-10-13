@@ -23,6 +23,11 @@
  * order id, so a venue that sees it twice places once.
  */
 import { semanticIdOf } from "@red-cup-engineering/computer-content-address-engineering-services-section/semantic-content-identity";
+import {
+  kalshiRiskContractBounds, kalshiOrderRiskCents,
+  kalshiRestingRiskCents, kalshiAccountRiskInputs,
+  kalshiUsdCeilCents, kalshiPriceCents, kalshiCountNumber,
+} from './kalshi-risk-law.mjs';
 
 const semanticId = semanticIdOf("brokerage.pluggable-venue-adapter.record");
 const identify = (body) => ({ id: semanticId(body), ...body });
@@ -32,28 +37,51 @@ function rejectCredentials(value, seen = new Set()) { if (!value || typeof value
 function admit(grant, scope, operation, now) { rejectCredentials(operation); const at = Date.parse(now), expiry = Date.parse(grant?.validUntil); if (!Number.isFinite(at) || !Number.isFinite(expiry)) throw new TypeError("authority-time-invalid"); if (grant?.type !== "RevocableBrokerageAuthorityGrant" || grant.revoked === true) throw new TypeError("current-authority-grant-required"); if (grant.adapter !== "kalshi") throw new TypeError("kalshi-authority-required"); if (at >= expiry) throw new TypeError("authority-expired"); if (!grant.scopes?.includes(scope)) throw new TypeError("venue-operation-scope-refused"); return grant; }
 function clean(value, seen = new Set()) { if (!value || typeof value !== "object") return value; if (seen.has(value)) return null; seen.add(value); if (Array.isArray(value)) return value.map((member) => clean(member, seen)); return Object.fromEntries(Object.entries(value).filter(([key]) => !credentialField(key)).map(([key, member]) => [key, clean(member, seen)])); }
 
-const cents = (dollars) => Math.round(Number(dollars) * 100);
-const riskOf = ({ side, count, price }) => Math.ceil(Number(count) * (side === "ask" ? 100 - Number(price) * 100 : Number(price) * 100) - 1e-9);
-const restingRisk = (order) => Math.ceil(order.count * (order.bookSide === "ask" ? 100 - order.priceCents : order.priceCents) - 1e-9);
+// Exact price/quantity arithmetic belongs to the Kalshi risk law; a Number
+// conversion here could turn missing risk limits into NaN and fail admission open.
 
 /**
  * The principal contract's verdict on one order, against an account reading. Pure.
  * @returns {{ok: true, orderRiskCents: number, openRiskCents: number, eventRiskCents: number} | {ok: false, reason: string}}
  */
-export function admitKalshiOrderUnderContract({ contract, account, order }) {
-  if (contract?.type !== "PrincipalBrokerageServiceContract") return { ok: false, reason: "principal-contract-required" };
-  const capitalCents = cents(contract.capital.amount), risk = contract.risk;
-  const orderRiskCents = riskOf(order);
-  const eventTicker = order.ticker.slice(0, order.ticker.lastIndexOf("-"));
-  const openRiskCents = account.positions.reduce((sum, row) => sum + row.costCents, 0) + account.resting.reduce((sum, row) => sum + restingRisk(row), 0);
-  const eventRiskCents = account.positions.filter((row) => row.eventTicker === eventTicker).reduce((sum, row) => sum + row.costCents, 0)
-    + account.resting.filter((row) => row.eventTicker === eventTicker).reduce((sum, row) => sum + restingRisk(row), 0);
-  if (capitalCents - account.equityCents >= cents(risk.maximumLossAmount)) return { ok: false, reason: `loss boundary reached: equity ${account.equityCents}c against capital ${capitalCents}c and maximum loss ${cents(risk.maximumLossAmount)}c` };
-  if (orderRiskCents > cents(risk.maximumOrderNotional)) return { ok: false, reason: `order risk ${orderRiskCents}c above the contract's ${cents(risk.maximumOrderNotional)}c` };
-  if (openRiskCents + orderRiskCents > cents(risk.maximumAggregateNotional)) return { ok: false, reason: `open risk ${openRiskCents + orderRiskCents}c above the contract's ${cents(risk.maximumAggregateNotional)}c` };
-  if (eventRiskCents + orderRiskCents > Math.floor(risk.concentrationLimit * capitalCents)) return { ok: false, reason: `event ${eventTicker} risk ${eventRiskCents + orderRiskCents}c above the contract's ${risk.concentrationLimit} of capital` };
-  if (orderRiskCents > account.freeCashCents) return { ok: false, reason: `order risk ${orderRiskCents}c above free cash ${account.freeCashCents}c` };
-  return { ok: true, orderRiskCents, openRiskCents, eventRiskCents };
+export function admitKalshiOrderUnderContract({ contract, account, order } = {}) {
+  if (contract?.type !== "PrincipalBrokerageServiceContract")
+    return { ok: false, reason: "principal-contract-required" };
+  // Any missing risk cap or observation MUST throw before venue placement.
+  // BigInt comparisons are exact and never silently evaluate against NaN.
+  const limits = kalshiRiskContractBounds(contract);
+  const observed = kalshiAccountRiskInputs(account);
+  if (typeof order?.ticker !== 'string' || !order.ticker.includes('-') ||
+      order.ticker.endsWith('-'))
+    throw new TypeError('event-bound-kalshi-order-ticker-required');
+  const eventTicker = eventOf(order.ticker);
+  const orderRiskCents = BigInt(kalshiOrderRiskCents(order));
+  const openRiskCents = observed.positions.reduce((sum,row)=>sum+row.costCents,0n)
+    + observed.resting.reduce((sum,row)=>sum+row.riskCents,0n);
+  const eventRiskCents = observed.positions
+    .filter(row=>row.eventTicker===eventTicker)
+    .reduce((sum,row)=>sum+row.costCents,0n)
+    + observed.resting
+      .filter(row=>row.eventTicker===eventTicker)
+      .reduce((sum,row)=>sum+row.riskCents,0n);
+  const money=value=>value.toString();
+  if (BigInt(limits.capitalCents) - observed.equityCents >= BigInt(limits.maximumLossCents))
+    return { ok:false,reason:`loss boundary reached: equity ${money(observed.equityCents)}c against capital ${limits.capitalCents}c and maximum loss ${limits.maximumLossCents}c` };
+  if (orderRiskCents > BigInt(limits.maximumOrderCents))
+    return { ok:false,reason:`order risk ${money(orderRiskCents)}c above the contract's ${limits.maximumOrderCents}c` };
+  if (openRiskCents + orderRiskCents > BigInt(limits.maximumAggregateCents))
+    return { ok:false,reason:`open risk ${money(openRiskCents+orderRiskCents)}c above the contract's ${limits.maximumAggregateCents}c` };
+  if (eventRiskCents + orderRiskCents > BigInt(limits.maximumEventCents))
+    return { ok:false,reason:`event ${eventTicker} risk ${money(eventRiskCents+orderRiskCents)}c above the contract's fractional concentration limit` };
+  if (orderRiskCents > observed.freeCashCents)
+    return { ok:false,reason:`order risk ${money(orderRiskCents)}c above free cash ${money(observed.freeCashCents)}c` };
+  if (openRiskCents > BigInt(Number.MAX_SAFE_INTEGER) ||
+      eventRiskCents > BigInt(Number.MAX_SAFE_INTEGER))
+    throw new RangeError('observed-open-risk-exceeds-safe-integer-cents');
+  return {
+    ok: true, orderRiskCents:Number(orderRiskCents),
+    openRiskCents:Number(openRiskCents),eventRiskCents:Number(eventRiskCents),
+  };
 }
 const eventOf = (ticker) => ticker.slice(0, ticker.lastIndexOf("-"));
 
@@ -68,22 +96,58 @@ const eventOf = (ticker) => ticker.slice(0, ticker.lastIndexOf("-"));
  *   resting: {orderId: string, ticker: string, eventTicker: string, bookSide: "bid"|"ask", priceCents: number, count: number, expiration: string|null}[]}}
  */
 export function normalizeKalshiAccount({ balance, positions = [], orders = [] } = {}) {
-  if (!Number.isInteger(balance?.balance)) throw new TypeError("kalshi-balance-required");
-  const marketPositions = Array.isArray(positions) ? positions : positions.market_positions ?? [];
-  const restingOrders = Array.isArray(orders) ? orders : orders.orders ?? [];
-  const held = marketPositions
-    .filter((row) => Number(row.position_fp) !== 0)
-    .map((row) => { const signed = Number(row.position_fp); return { ticker: row.ticker, eventTicker: eventOf(row.ticker), side: signed < 0 ? "no" : "yes", contracts: Math.abs(signed), costCents: cents(row.market_exposure_dollars) }; });
-  const resting = restingOrders.map((order) => ({
-    orderId: order.order_id, ticker: order.ticker, eventTicker: eventOf(order.ticker),
-    bookSide: order.book_side ?? ((order.side === "yes" && order.action === "sell") || (order.side === "no" && order.action === "buy") ? "ask" : "bid"),
-    priceCents: Number(order.yes_price_dollars) * 100, count: Number(order.remaining_count_fp), expiration: order.expiration_time ?? null,
-  }));
-  if (held.some(row=>!Number.isFinite(row.contracts)||row.contracts<=0||!Number.isFinite(row.costCents)||row.costCents<0)) throw new TypeError('kalshi-position-value-invalid');
-  if (resting.some((order) => !['bid','ask'].includes(order.bookSide) || !Number.isFinite(order.priceCents) || order.priceCents < 0 || order.priceCents > 100 || !Number.isFinite(order.count) || order.count < 0)) throw new TypeError('kalshi-resting-order-value-invalid');
-  const restingCollateralCents = resting.reduce((sum, order) => sum + Math.ceil((order.bookSide === 'ask' ? 100 - order.priceCents : order.priceCents) * order.count - 1e-9), 0);
-  const cashCents = balance.balance, portfolioCents = Number.isInteger(balance.portfolio_value) ? balance.portfolio_value : 0;
-  return { cashCents, equityCents: cashCents + portfolioCents, freeCashCents: cashCents - restingCollateralCents, restingCollateralCents, positions: held, resting };
+  // Absence of a source balance is UNKNOWN, not a zero-value portfolio.
+  if (!Number.isSafeInteger(balance?.balance)) throw new TypeError("kalshi-balance-required");
+  if (!Number.isSafeInteger(balance.portfolio_value)) throw new TypeError("kalshi-portfolio-value-required");
+  const marketPositions = Array.isArray(positions) ? positions : positions?.market_positions;
+  const restingOrders = Array.isArray(orders) ? orders : orders?.orders;
+  if (!Array.isArray(marketPositions) || !Array.isArray(restingOrders))
+    throw new TypeError('complete-observed-kalshi-positions-and-orders-required');
+  const held = marketPositions.flatMap(row => {
+    if (typeof row?.ticker !== 'string' || !row.ticker.includes('-'))
+      throw new TypeError('kalshi-position-ticker-invalid');
+    let signed;
+    try {signed=kalshiCountNumber(row.position_fp,{signed:true});}
+    catch {throw new TypeError('kalshi-position-value-invalid');}
+    if (signed===0)return [];
+    return [{ticker:row.ticker,eventTicker:eventOf(row.ticker),
+      side:signed<0?'no':'yes',contracts:Math.abs(signed),
+      costCents:kalshiUsdCeilCents(row.market_exposure_dollars)}];
+  });
+  const resting = restingOrders.map(order => {
+    if (typeof order?.ticker !== 'string' || !order.ticker.includes('-') ||
+        typeof order.order_id!=='string' || !order.order_id)
+      throw new TypeError('kalshi-resting-order-identity-required');
+    return {
+      orderId:order.order_id,ticker:order.ticker,eventTicker:eventOf(order.ticker),
+      bookSide:order.book_side ?? (
+        (order.side==='yes'&&order.action==='sell')||
+        (order.side==='no'&&order.action==='buy')?'ask':'bid'),
+      priceCents:kalshiPriceCents(order.yes_price_dollars),
+      // Preserve the exact ORIGINAL source decimals for collateral calculation.
+      yesPriceDollars:String(order.yes_price_dollars),
+      countDecimal:String(order.remaining_count_fp),
+      count:kalshiCountNumber(order.remaining_count_fp),
+      expiration:order.expiration_time??null,
+    };
+  });
+  if(held.some(row=>!Number.isSafeInteger(row.costCents)||row.costCents<0))
+    throw new TypeError('kalshi-position-value-invalid');
+  if(resting.some(row=>!['bid','ask'].includes(row.bookSide)))
+    throw new TypeError('kalshi-resting-order-value-invalid');
+  const collateral=resting.reduce((sum,row)=>sum+BigInt(kalshiRestingRiskCents({
+    ...row,count:row.countDecimal,
+  })),0n);
+  const cashCents=balance.balance,portfolioCents=balance.portfolio_value;
+  const withinSafe=x=>x<=BigInt(Number.MAX_SAFE_INTEGER)&&x>=BigInt(Number.MIN_SAFE_INTEGER);
+  const equity=BigInt(cashCents)+BigInt(portfolioCents);
+  const freeCash=BigInt(cashCents)-collateral;
+  if(![equity,freeCash,collateral].every(withinSafe))
+    throw new RangeError('kalshi-account-cent-aggregation-overflow');
+  return {
+    cashCents,equityCents:Number(equity),freeCashCents:Number(freeCash),
+    restingCollateralCents:Number(collateral),positions:held,resting,
+  };
 }
 
 /**
@@ -92,11 +156,21 @@ export function normalizeKalshiAccount({ balance, positions = [], orders = [] } 
  */
 export function createKalshiAdapter({ client } = {}) {
   for (const method of ["getBalance", "getPositions", "getOrders", "getFills", "createOrder", "cancelOrder"]) if (typeof client?.[method] !== "function") throw new TypeError("kalshi-adapter-configuration-invalid");
-  const observe = async () => normalizeKalshiAccount({ balance: await client.getBalance(), positions: await client.getPositions({ count_filter: "position" }), orders: await client.getOrders({ status: "resting" }) });
+  const observe = async () => {
+    const balance=await client.getBalance();
+    const positions=await client.getPositions({count_filter:"position"});
+    const orders=await client.getOrders({status:"resting"});
+    // A missing API response is not proof of an empty inventory or order book.
+    if (!balance || positions===null || positions===undefined ||
+        orders===null || orders===undefined)
+      throw new TypeError('complete-current-kalshi-venue-reading-required');
+    return normalizeKalshiAccount({balance,positions,orders});
+  };
   const checkOrder = (order) => {
     if (!order || (order.side !== "bid" && order.side !== "ask")) throw new TypeError("kalshi-order-side-invalid");
     if (typeof order.ticker !== "string" || order.ticker.length === 0) throw new TypeError("kalshi-order-ticker-required");
-    if (!(Number(order.count) >= 0.01) || !(Number(order.price) > 0 && Number(order.price) < 1)) throw new TypeError("kalshi-order-count-or-price-invalid");
+    try {kalshiOrderRiskCents(order);}
+    catch(error) {throw new TypeError("kalshi-order-count-or-price-invalid: "+error.message);}
     if (typeof order.clientOrderId !== "string" || order.clientOrderId.length === 0) throw new TypeError("kalshi-client-order-id-required");
   };
   const contractOf = (grant, contract) => { if (contract?.id !== grant?.principalContract) throw new TypeError("grant-names-another-contract"); return contract; };
@@ -104,7 +178,10 @@ export function createKalshiAdapter({ client } = {}) {
   const admitUnderContract = async ({ grant, contract, order, now }) => {
     admit(grant, "orders:live", { order }, now);
     checkOrder(order);
-    return admitKalshiOrderUnderContract({ contract: contractOf(grant, contract), account: await observe(), order });
+    const boundContract=contractOf(grant,contract);
+    // Check the principal's entire mandate before spending a venue read.
+    kalshiRiskContractBounds(boundContract);
+    return admitKalshiOrderUnderContract({contract:boundContract,account:await observe(),order});
   };
   const call = async ({ grant, scope, method, path, run, now = new Date().toISOString(), operation = {} }) => {
     admit(grant, scope, { method, path, ...operation }, now);
