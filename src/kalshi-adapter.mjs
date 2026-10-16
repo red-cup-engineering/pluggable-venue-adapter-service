@@ -22,7 +22,7 @@
  * the same admission without writing. Every write carries the caller's client
  * order id, so a venue that sees it twice places once.
  */
-import { semanticIdOf } from "@red-cup-engineering/computer-content-address-engineering-services-section/semantic-content-identity";
+import { semanticIdOf } from "@red-cup-engineering/computer-data-engineering-services-section/semiotic-expression-notation/semantic-content-identity";
 import {
   kalshiRiskContractBounds, kalshiOrderRiskCents,
   kalshiRestingRiskCents, kalshiAccountRiskInputs,
