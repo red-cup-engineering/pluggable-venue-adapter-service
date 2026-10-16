@@ -1,6 +1,6 @@
 import {reconcileBaseNativeUsdc} from '@red-cup-engineering/account-evidence-reconciliation-service';
 import { Interface, Transaction, getAddress, keccak256 } from 'ethers';
-import { semanticIdOf } from '@red-cup-engineering/computer-content-address-engineering-services-section/semantic-content-identity';
+import { semanticIdOf } from '@red-cup-engineering/computer-data-engineering-services-section/semiotic-expression-notation/semantic-content-identity';
 import { allocationsFor } from '@red-cup-engineering/mandate-portfolio-allocation-service/market-game';
 import { createTransactionEffectCustody } from './transaction-effect-custody.mjs';
 export const baseSpotRecordId = semanticIdOf('brokerage.base-spot.record');
