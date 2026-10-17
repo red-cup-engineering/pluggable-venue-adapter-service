@@ -48,6 +48,9 @@ function configuration(){
      transactionHash:N('6'),market,asset,buyer,marketId:'12',askId:'42',lots:'2',outcome:0,
      paymentNonce:N('5'),buyNonce:N('4'),amount:'1111000',maker:A('2'),provider:A('1'),
      protocolRecipient:A('3'),makerAmount:'1100000',providerFee:'4400',protocolFee:'6600',
+     sourceEconomicEvent:{type:'EvmAgentPredictionAskFilled',chain:network,
+       blockNumber:125,blockHash:N('8'),transactionHash:N('6'),logIndex:6,
+       emitter:market,event:'AskFilled'},
      authorizationNonceConsumed:true,buyerDebited:true,sharesReceived:true,
      feesSettled:true,backingConserved:true};},
    implementation:{ethers:{},encodeMarketCall:()=>body,
@@ -98,6 +101,7 @@ test('source-owned enterprise composes signed market fill across a genuine HTTP 
   assert.equal(head.success,true);assert.equal(head.network,network);
   const receipt=await paid.json();
   assert.equal(receipt.status,'filled');assert.equal(receipt.transactionHash,N('6'));
+  assert.equal(receipt.sourceEconomicEvent.logIndex,6);
   assert.deepEqual(getMetrics(),{signed:1,custodyCalls:1,received:1});
  }finally{listener.close();await once(listener,'close');}
 });
