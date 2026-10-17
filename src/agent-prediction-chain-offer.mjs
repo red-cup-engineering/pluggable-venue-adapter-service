@@ -25,19 +25,23 @@ function asAddress(v, label) {
   }
   return v.toLowerCase();
 }
-function positive(v, label) {
-  if (typeof v !== 'bigint' && typeof v !== 'number' && typeof v !== 'string') {
-    throw new TypeError(label + ' must be a positive integer');
+const DECIMAL = /^(0|[1-9][0-9]*)$/u;
+function exactUnsigned(value, label, allowZero) {
+  if (typeof value === 'number' && !Number.isSafeInteger(value)) {
+    throw new TypeError(label + ' cannot use unsafe-precision JavaScript numbers');
   }
-  const x = BigInt(v);
-  if (x <= 0n || x > (1n << 256n) - 1n) throw new RangeError(label + ' out of range');
+  if (!(typeof value === 'bigint' || typeof value === 'number' ||
+      (typeof value === 'string' && DECIMAL.test(value)))) {
+    throw new TypeError(label + ' requires an exact unsigned integer');
+  }
+  const x = BigInt(value);
+  if (x < 0n || x > (1n << 256n) - 1n || (!allowZero && x === 0n)) {
+    throw new RangeError(label + ' outside uint256 bounds');
+  }
   return x;
 }
-function asUint(v, label) {
-  const x = BigInt(v);
-  if (x < 0n || x > (1n << 256n) - 1n) throw new RangeError(label + ' out of range');
-  return x;
-}
+function positive(v, label) { return exactUnsigned(v, label, false); }
+function asUint(v, label) { return exactUnsigned(v, label, true); }
 function codePresent(code) {
   return typeof code === 'string' && /^0x(?:[0-9a-fA-F]{2})+$/u.test(code)
     && /[1-9a-fA-F]/u.test(code.slice(2));
