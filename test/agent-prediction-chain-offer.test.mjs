@@ -14,7 +14,7 @@ function fixtures() {
     getBlock: async () => ({ timestamp: NOW - 3, hash: HASH('8') }),
     getCode: async (address, block) => {
       history.push(['getCode', address, block]);
-      return '0x60006000';
+      return address === ADDRESS('c') ? '0x60016000' : '0x60026000';
     },
   };
   const marketReader = {
@@ -63,6 +63,8 @@ function fixtures() {
     provider, marketReader, assetReader, resource: RESOURCE,
     marketAddress: ADDRESS('c'), expectedAsset: ADDRESS('e'),
     expectedRulesDigest: HASH('a'), expectedNetwork: 'eip155:84532',
+    expectedMarketCodeHash: HASH('6'), expectedAssetCodeHash: HASH('7'),
+    computeCodeHash: (code) => code === '0x60016000' ? HASH('6') : HASH('7'),
     askId: '42', lots: '2', nowSeconds: NOW,
   };
 }
@@ -96,6 +98,12 @@ test('wrong chain, absent contract bytecode, stale block or wrong rules refuse',
   f = fixtures();
   f.expectedRulesDigest = HASH('b');
   await assert.rejects(offerAgentOrderFromChain(f), /rules/u);
+  f = fixtures();
+  f.expectedMarketCodeHash = HASH('f');
+  await assert.rejects(offerAgentOrderFromChain(f), /runtime bytecode/u);
+  f = fixtures();
+  f.expectedAssetCodeHash = HASH('f');
+  await assert.rejects(offerAgentOrderFromChain(f), /runtime bytecode/u);
 });
 
 test('no escrow, resolved or expired market, wrong token or distorted fee quote refuse', async () => {
