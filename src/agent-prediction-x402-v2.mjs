@@ -182,6 +182,23 @@ export function readAgentOrderPayment(header, sourceChallenge, { nowSeconds: clo
   return Object.freeze({ packet: structuredClone(packet), challenge, requirement: accepted });
 }
 
+/** Extract only the bounded untrusted block locator for rebuilding an earlier 402.
+ * This never authenticates a payment, source or buyer. Accepted data must be
+ * re-read and joined through readAgentOrderPayment before dispatch. */
+export function signedAgentOrderQuoteLocator(header) {
+  const packet = decodeHeader(header, 'PAYMENT-SIGNATURE');
+  const accepted = object(packet.accepted, 'signed accepted requirement');
+  const extra = object(accepted.extra, 'signed accepted extra');
+  const height = amount(extra.quoteBlock, 'quoteBlock', true);
+  if (height > BigInt(Number.MAX_SAFE_INTEGER) || !HASH.test(extra.quoteBlockHash ?? '')) {
+    throw new TypeError('signed quote requires one bounded numbered block hash');
+  }
+  return Object.freeze({
+    pinnedQuoteBlock: Number(height),
+    pinnedQuoteBlockHash: extra.quoteBlockHash.toLowerCase(),
+  });
+}
+
 function pending(stage, submitted = {}) {
   return Object.freeze({
     status: 202,
