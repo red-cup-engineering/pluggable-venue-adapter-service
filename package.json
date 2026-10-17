@@ -27,7 +27,8 @@
     "./src/agent-prediction-chain-offer.mjs": "./src/agent-prediction-chain-offer.mjs",
     "./agent-prediction-http": "./src/agent-prediction-http.mjs",
     "./agent-prediction-sponsored-fill": "./src/agent-prediction-sponsored-fill.mjs",
-    "./agent-prediction-enterprise-runtime": "./src/agent-prediction-enterprise-runtime.mjs"
+    "./agent-prediction-enterprise-runtime": "./src/agent-prediction-enterprise-runtime.mjs",
+    "./transaction-effect-custody": "./src/transaction-effect-custody.mjs"
   },
   "files": [
     "src/",
