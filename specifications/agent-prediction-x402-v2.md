@@ -53,7 +53,7 @@ The actual HTTP 402 `PAYMENT-REQUIRED` is a base64-encoded object with `x402Vers
 
 A client independently signs **two cryptographically separate commands**:
 
-- `BuyAsk(buyer,askId,lots,maxTotal,deadline,nonce)` under EIP-712 `name="561 Agent Prediction Market PoC"`, `version="1"`, verifying `chainId` and `verifyingContract=<market contract>`. The signature binds price limit, order and receiver through domain and contract. Never let an agent's untrusted claimed mandate determine its own risk ceiling.
+- `BuyAsk(buyer,askId,lots,maxTotal,deadline,nonce,paymentNonce)` under EIP-712 `name="561 Agent Prediction Market PoC"`, `version="1"`, verifying `chainId` and `verifyingContract=<market contract>`. The signature binds price limit, order and receiver through domain and contract. `buyIntent.paymentNonce` MUST equal `authorization.nonce`, binding the two independently signed authorizations against facilitator cross-pairing. Never let an agent's untrusted claimed mandate determine its own risk ceiling.
 - `ReceiveWithAuthorization(from,to,value,validAfter,validBefore,nonce)` under the collateral token's independent EIP-712 domain. `from=buyer`, `to=market contract`, `value=<exact quoted total>`. This is an EIP-3009 authorization, but its **execution occurs through the custom scheme's market contract**, not standard x402 exact facilitator transfer semantics.
 
 The client sends an x402 v2 `PAYMENT-SIGNATURE` base64 envelope:
@@ -70,7 +70,8 @@ The client sends an x402 v2 `PAYMENT-SIGNATURE` base64 envelope:
       "lots": "2",
       "maxTotal": "1111000",
       "deadline": "1792100000",
-      "nonce": "0x...32bytes"
+      "nonce": "0x...32bytes",
+      "paymentNonce": "0x...exact-same-32bytes-as-authorization-nonce"
     },
     "buySignature": "0x...typed-EIP712-signature-bytes",
     "authorization": {
@@ -117,9 +118,9 @@ An agent can be simultaneously a forecaster and a maker but its trade signature 
 
 ## Mandatory receiver-only funding correction and provider economics
 
-**P0: contract payment can be consumed without fill.** The staged Solidity `AgentPredictionMarketPoC.takeAskAuthorized` currently calls `transferWithAuthorization`, whose existing token allows any watcher to execute the signed transfer directly. The watcher can consume buyer funds and the nonce without issuing shares. EIP-3009 [explicitly warns against this pattern](https://eips.ethereum.org/EIPS/eip-3009#security-considerations). The existing contract and JavaScript candidates are **not safe or conformant** for sponsored market fills. [Ethereum Engineering issue #2](https://github.com/red-cup-engineering/ethereum-services-section/issues/2) owns the exact cross-contract defect.
+**P0: receiver-only source repair is staged, not qualified.** The earlier Solidity market called permissionlessly executable `transferWithAuthorization`, allowing watcher interception without shares. The existing [Ethereum PR #1](https://github.com/red-cup-engineering/ethereum-services-section/pull/1) now contains a source candidate that replaces the sponsored-fill call with `receiveWithAuthorization`, adds that entry point to the existing asset, and adds adversarial Foundry tests (head `fd2b70e`). None of these tests has a compiler/runtime receipt or independent chain receiving. The code remains **unsafe to advertise as a working paid market**, unmerged and not for live funds. EIP-3009 [warns against the original pattern](https://eips.ethereum.org/EIPS/eip-3009#security-considerations); [Ethereum issue #2](https://github.com/red-cup-engineering/ethereum-services-section/issues/2) remains the security admission owner.
 
-**Required corrected semantics:** market must invoke EIP-3009 `receiveWithAuthorization` from its own transaction, and token must implement `ReceiveWithAuthorization` with distinct EIP-712 type hash and `msg.sender == to` validation before consuming authorization. The candidate collateral token currently lacks that receiver-only method. The locally proposed `eip3009-receive` custom scheme must explicitly refuse unsupported tokens/clients; standard `exact/eip3009` consumers continue to use **different** `TransferWithAuthorization` signatures. A normal x402 `exact` facilitator is not a market-filling facilitator.
+**Required corrected semantics:** market must invoke EIP-3009 `receiveWithAuthorization` from its own transaction, and token must implement `ReceiveWithAuthorization` with distinct EIP-712 type hash and `msg.sender == to` validation before consuming authorization. The `main` collateral token still lacks that receiver-only method; the unmerged PR branch adds it as a candidate pending compiler and independent receiver tests. The locally proposed `eip3009-receive` custom scheme must explicitly refuse unsupported tokens/clients; standard `exact/eip3009` consumers continue to use **different** `TransferWithAuthorization` signatures. A normal x402 `exact` facilitator is not a market-filling facilitator.
 
 **Attribution:** maker-nominated `ask.provider` is a payout beneficiary, not proof that the beneficiary delivered the service. If agent R discovers/routes a trade whose ask names P, P earns the on-chain provider share and R does not. Thus the current path is a **maker-linked fee PoC**, not yet an open provider network. The [scientific comparison](https://github.com/lenticule-science/gambling-services-section/blob/research/agent-native-onchain-prediction-20261015/services/prediction-market-science-services-section/docs/2026-10-15-agent-native-onchain-market-research.md) tests maker-nominated, buyer-signed router, and separately charged x402 information-provider alternatives. Provider discovery/qualification remains under Coesite's existing ActivityPub++/OCap/CapTP/A2A capability market. Do not invent a new registry.
 
