@@ -37,8 +37,10 @@ For an illustrative synthetic quote with token atomic units:
     "providerFee": "4400",
     "protocolFee": "6600",
     "provider": "0x1010101010101010101010101010101010101010",
+    "maker": "0x2020202020202020202020202020202020202020",
+    "protocolRecipient": "0x3030303030303030303030303030303030303030",
     "quoteBlock": "125",
-    "expiresAt": "<market close/ask expiry as integer seconds>",
+    "expiresAt": "1792100000",
     "buyIntentEip712Domain": {
       "name": "561 Agent Prediction Market PoC",
       "version": "1"
@@ -91,17 +93,19 @@ Values above are **illustrative**; no example represents usable signed authoriza
 
 ## Exact API: pure interface helpers
 
-`offerAgentOrder(input)` → `{status:402,headers:{"PAYMENT-REQUIRED":<base64>},body}`. Fails on insecure URLs, ill-typed/wrong-sized amount strings, wrong identities, invalid outcome and inconsistent gross/fees.
+`offerAgentOrder({resource,requirement,nowSeconds?})` → `{status:402,headers:{"PAYMENT-REQUIRED":<base64>},body}`. Fails on insecure URLs, ill-typed/wrong-sized amount strings, wrong identities, invalid outcome and inconsistent gross/fees.
 
-`readAgentOrderPayment(header,challenge)` → parsed packet and pinned requirements after validating exact accepted terms, exact resource, integer atomic amount, intended ask/lot/recipient and live validity windows. **It does not validate cryptographic signatures**. The caller's facilitator must.
+`readAgentOrderPayment(header,challenge,{nowSeconds?})` → parsed packet and pinned requirements after validating exact accepted terms, exact resource, integer atomic amount, intended ask/lot/recipient and live validity windows. **It does not validate cryptographic signatures**. The caller's facilitator must.
 
-`settleAgentOrder({paymentSignatureHeader,challenge,facilitator,independentReceipt})` → asynchronous machine boundary:
+`settleAgentOrder({paymentSignatureHeader,challenge,facilitator,independentReceipt,nowSeconds?})` → asynchronous machine boundary:
   - Calls the *injected* custom facilitator once. No automatic replay on uncertain payment.
   - Checks successful transaction hash, chain and payer against submitted authority.
   - Calls the *injected* independent chain receiver, which MUST verify actual on-chain status/events and balances from a genuinely independent provider, including the token's consumed EIP-3009 authorization nonce.
   - Returns `200` only on independent matching of expected market, buyer, order, lot, asset, paymentNonce, intentNonce, maker and provider/protocol fees, and all-market backing conservation.
   - Returns `202 settlement_pending` on facilitator uncertainty, or `202 independent_receiving_pending` if the facilitator reports success without an admissible independent receipt. Neither outcome authorizes a repeated charge or claims delivered shares.
   - Rejects bad/mismatched facilitator responses and refused preflight signatures.
+
+The module now exists in the original Engineering owner as `src/agent-prediction-x402-v2.mjs`, exported at `@red-cup-engineering/pluggable-venue-adapter-service/agent-prediction-x402-v2`. The explicit `maker` and `protocolRecipient` requirements carry actual fee-beneficiary identity through to the independent chain receipt; they MUST originate from authenticated on-chain contract/ask state. Caller-supplied `nowSeconds` is for reproducible testing; the default reads current time. Quotes, nonce joins and fee arithmetic are checked as exact `uint256` decimal strings. The syntactic helper does not verify cryptographic signatures and cannot mint, transfer or broadcast anything without an injected custom facilitator. A separate trusted receiver must independently recover finality, transaction status, authorization nonce, share delivery, provider/maker/protocol payouts and backing conservation. Incomplete or uncertain submissions receive 202 without automatic payment retry; a named filled outcome requires a complete consistent receiving record. Initial focused Node tests exercise both normal and adversarial synthetic cases, **not a deployed market**.
 
 These helpers perform **no key reads, on-chain RPC, routing, HTTP listening or delegation by themselves**. A real implementation MUST reuse existing purchased-resource x402 transport, Ethereum signer/bundler authorities and Coesite's independently witnessed receiving, not invent parallel registries or new wallet custody.
 
