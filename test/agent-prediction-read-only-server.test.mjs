@@ -13,7 +13,7 @@ const quote=({resource})=>{
       name:'Synthetic x402 Collateral',version:'2',marketId:'12',askId:'42',lots:'2',
       outcome:0,unitPrice:'550000',makerAmount:'1100000',tradeFee:'11000',
       providerFee:'4400',protocolFee:'6600',provider:address('1'),maker:address('2'),
-      protocolRecipient:address('3'),quoteBlock:'125',expiresAt:String(now+60),
+      protocolRecipient:address('3'),quoteBlock:'125',quoteBlockHash:'0x'+'8'.repeat(64),expiresAt:String(now+60),
       buyIntentEip712Domain:{name:'561 Agent Prediction Market PoC',version:'1'}
     }
   }});
