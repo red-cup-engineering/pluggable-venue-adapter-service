@@ -49,8 +49,9 @@ async function call(reader, method, args, blockTag) {
 
 export async function offerAgentOrderFromChain({
   provider, marketAddress, expectedAsset, expectedRulesDigest, expectedNetwork,
+  expectedMarketCodeHash, expectedAssetCodeHash,
   askId, lots, resource, nowSeconds = now(), maxBlockAgeSeconds = 30,
-  maxTimeoutSeconds = 45, marketReader, assetReader,
+  maxTimeoutSeconds = 45, marketReader, assetReader, computeCodeHash,
 } = {}) {
   if (!provider || typeof provider.getNetwork !== 'function'
       || typeof provider.getBlockNumber !== 'function' || typeof provider.getBlock !== 'function'
@@ -61,6 +62,9 @@ export async function offerAgentOrderFromChain({
   const asset = asAddress(expectedAsset, 'expectedAsset');
   if (typeof expectedRulesDigest !== 'string' || !HASH.test(expectedRulesDigest)) {
     throw new TypeError('expectedRulesDigest must be an admitted hash');
+  }
+  if (!HASH.test(expectedMarketCodeHash ?? '') || !HASH.test(expectedAssetCodeHash ?? '')) {
+    throw new TypeError('admitted market and collateral runtime code hashes are required');
   }
   if (typeof expectedNetwork !== 'string' || !/^eip155:[1-9][0-9]*$/u.test(expectedNetwork)) {
     throw new TypeError('expectedNetwork must be pinned CAIP-2');
@@ -90,6 +94,17 @@ export async function offerAgentOrderFromChain({
   ]);
   if (!codePresent(marketCode) || !codePresent(tokenCode)) {
     throw new Error('market and collateral token must have bytecode at quoted block');
+  }
+  const hashCode = computeCodeHash ?? (await import('ethers')).keccak256;
+  if (typeof hashCode !== 'function') {
+    throw new TypeError('runtime code hashing capability is required');
+  }
+  const [actualMarketHash, actualAssetHash] = [
+    hashCode(marketCode), hashCode(tokenCode),
+  ];
+  if (actualMarketHash?.toLowerCase() !== expectedMarketCodeHash.toLowerCase()
+      || actualAssetHash?.toLowerCase() !== expectedAssetCodeHash.toLowerCase()) {
+    throw new Error('deployed market or token runtime bytecode differs from admitted source');
   }
   if (!marketReader || !assetReader) {
     const { Contract } = await import('ethers');
