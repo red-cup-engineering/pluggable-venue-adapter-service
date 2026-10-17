@@ -185,3 +185,16 @@ test('only matching independently settled fills produce canonical PAYMENT-RESPON
   assert.equal(refused.headers.get('PAYMENT-RESPONSE'),null);
   assert.deepEqual(await refused.json(),{status:'settlement_receiving_conflict',retryPayment:false});
 });
+
+test('deterministic custody preflight refusal is a real 409, never a fabricated pending charge',async()=>{
+  const challenge=quote({resource:{url:origin+route+'/buy'}});
+  const signed=payload(challenge);
+  for(const refusal of ['order_intent_conflict','preflight_refused']){
+    const handle=create({active:true,admitBuyer:()=>true,
+      settlementOperation:{execute:async()=>({status:409,body:{status:refusal,retryPayment:false}})}});
+    const response=await handle(post(route+'/buy',{'payment-signature':signed}));
+    assert.equal(response.status,409);
+    assert.deepEqual(await response.json(),{status:refusal,retryPayment:false});
+    assert.equal(response.headers.get('PAYMENT-RESPONSE'),null);
+  }
+});
