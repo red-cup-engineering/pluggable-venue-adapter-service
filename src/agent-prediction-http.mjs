@@ -1,4 +1,4 @@
-import { readAgentOrderPayment } from './agent-prediction-x402-v2.mjs';
+import { readAgentOrderPayment, signedAgentOrderQuoteLocator } from './agent-prediction-x402-v2.mjs';
 import { offerAgentOrderFromChain } from './agent-prediction-chain-offer.mjs';
 
 // Domain-owned Fetch interface. The site/web transport remains with its
@@ -90,10 +90,17 @@ export function createAgentPredictionOrderHttpHandler({
     }
     if (!DECIMAL.test(lots ?? '')) return json(400, { status: 'invalid_lots' });
     const resourceUrl = base.origin + '/market/' + marketId + '/asks/' + askId + '/buy';
+    const signature = mode === 'buy' ? request.headers.get('payment-signature') : null;
+    let signedLocator;
+    if (signature !== null) {
+      try { signedLocator = signedAgentOrderQuoteLocator(signature); }
+      catch { return json(400, { status: 'payment_signature_refused', paid: false }); }
+    }
     let challenge;
     try {
       challenge = await quoteMarket({
         ...quoteInputs, marketId, askId, lots,
+        ...(signedLocator ?? {}),
         resource: { url: resourceUrl },
       });
       if (challenge?.status !== 402 || typeof challenge.headers?.['PAYMENT-REQUIRED'] !== 'string') {
@@ -108,7 +115,9 @@ export function createAgentPredictionOrderHttpHandler({
         throw new Error('quote provider did not bind the requested market, order, quantity and resource');
       }
     } catch {
-      return json(503, { status: 'quote_unavailable', paid: false });
+      return signedLocator === undefined
+        ? json(503, { status: 'quote_unavailable', paid: false })
+        : json(409, { status: 'signed_quote_stale', paid: false, retryPayment: false });
     }
     if (mode === 'quote') {
       // An ordinary information response, never a payable order until active.
@@ -116,7 +125,6 @@ export function createAgentPredictionOrderHttpHandler({
       return json(200, { status: 'read_only_quote', quote: preview.accepts[0],
         payable, paymentEnabled: payable }, { 'x-robots-tag': 'noindex' });
     }
-    const signature = request.headers.get('payment-signature');
     if (signature === null) {
       return json(402, challenge.body, { 'PAYMENT-REQUIRED': challenge.headers['PAYMENT-REQUIRED'] });
     }
