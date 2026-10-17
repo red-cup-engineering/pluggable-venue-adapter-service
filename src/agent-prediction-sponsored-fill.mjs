@@ -31,6 +31,8 @@ function hash(value,label) {
   return value.toLowerCase();
 }
 function uint(value,label,allowZero=true) {
+  if(typeof value==='number'&&!Number.isSafeInteger(value))
+    throw new TypeError(label+' cannot use imprecise JavaScript numeric amounts');
   if((typeof value!=='string'&&typeof value!=='bigint'&&typeof value!=='number')||
     !/^(0|[1-9][0-9]*)$/u.test(String(value)))throw new TypeError(label+' requires exact uint256');
   const n=BigInt(value);
