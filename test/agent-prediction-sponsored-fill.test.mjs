@@ -71,7 +71,9 @@ function setup(overrides={}){
     return {finalized:true,transactionStatus:1,network,transactionHash:txHash,
       market,asset,buyer,askId:'42',marketId:'12',lots:'2',outcome:0,
       paymentNonce:N('5'),buyNonce:N('4'),amount,maker:A('2'),provider:A('1'),protocolRecipient:A('3'),
-      makerAmount:'1100000',providerFee:'4400',protocolFee:'6600',authorizationNonceConsumed:true,
+      makerAmount:'1100000',providerFee:'4400',protocolFee:'6600',sourceEconomicEvent:{type:'EvmAgentPredictionAskFilled',chain:network,
+        blockNumber:125,blockHash:N('8'),transactionHash:txHash,logIndex:6,
+        emitter:market,event:'AskFilled'},authorizationNonceConsumed:true,
       buyerDebited:true,sharesReceived:true,feesSettled:true,backingConserved:true};
   };
   const operation=createCustodiedAgentPredictionSettlement({
@@ -95,7 +97,10 @@ test('custody-backed authorized market fill simulates one call and yields filled
   const result=await operation.execute(sample());
   assert.equal(result.status,200);
   assert.deepEqual(result.body,{status:'filled',transactionHash:txHash,network,market,askId:'42',
-    lots:'2',recipient:buyer,amount});
+    lots:'2',recipient:buyer,amount,
+    sourceEconomicEvent:{type:'EvmAgentPredictionAskFilled',chain:network,
+      blockNumber:125,blockHash:N('8'),transactionHash:txHash,logIndex:6,
+      emitter:market,event:'AskFilled'}});
   assert.equal(events.filter(e=>e[0]==='simulate').length,1);
   assert.equal(events.filter(e=>e[0]==='prepare').length,1);
   assert.equal(events.filter(e=>e[0]==='receive').length,1);
