@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { offerAgentOrderFromChain } from '../src/agent-prediction-chain-offer.mjs';
+import { main as quoteCommand } from '../scripts/quote-agent-prediction-order.mjs';
 
 const ADDRESS = (c) => '0x' + c.repeat(40);
 const HASH = (c) => '0x' + c.repeat(64);
@@ -126,4 +127,49 @@ test('no escrow, resolved or expired market, wrong token or distorted fee quote 
   const q = f.marketReader.quoteAsk;
   f.marketReader.quoteAsk = async (...args) => ({ ...await q(...args), protocolFee: 6601n });
   await assert.rejects(offerAgentOrderFromChain(f), /conservation/u);
+});
+
+
+test('command consumes an authorized read RPC and produces the exact synthetic 402 offer', async () => {
+  const { provider, marketReader, assetReader, computeCodeHash, ...configuration } = fixtures();
+  const output = [];
+  const stdin = { async *[Symbol.asyncIterator]() { yield Buffer.from(JSON.stringify(configuration)); } };
+  let opened = 0;
+  const response = await quoteCommand([], {
+    stdin,
+    env: { PREDICTION_EVM_READ_RPC_URL: 'http://127.0.0.1:8545' },
+    stdout: { write: data => output.push(data) },
+    openProvider: async url => {
+      opened++;
+      assert.equal(url, 'http://127.0.0.1:8545/');
+      return provider;
+    },
+    marketReader, assetReader, computeCodeHash, nowSeconds: NOW,
+  });
+  assert.equal(opened, 1);
+  assert.equal(response.status, 402);
+  assert.equal(output.length, 1);
+  const published = JSON.parse(output[0]);
+  assert.deepEqual(published, JSON.parse(JSON.stringify(response)));
+  const quoted = JSON.parse(Buffer.from(published.headers['PAYMENT-REQUIRED'], 'base64'));
+  assert.equal(quoted.accepts[0].extra.quoteBlockHash, HASH('8'));
+  assert.equal(quoted.accepts[0].amount, '1111000');
+});
+
+test('command refuses foreign/insecure read RPC or an unauthenticated consumer clock', async () => {
+  const { provider, marketReader, assetReader, computeCodeHash, ...configuration } = fixtures();
+  let attempts = 0;
+  const input = () => ({ async *[Symbol.asyncIterator]() { yield Buffer.from(JSON.stringify(configuration)); } });
+  await assert.rejects(quoteCommand([], {
+    env: { PREDICTION_EVM_READ_RPC_URL: 'http://rpc.example:8545/' },
+    stdin: input(), openProvider: async () => { attempts++; return provider; },
+  }), /read-only RPC/u);
+  configuration.nowSeconds = NOW - 1000000;
+  await assert.rejects(quoteCommand([], {
+    env: { PREDICTION_EVM_READ_RPC_URL: 'http://localhost:8545/' },
+    stdin: input(),
+    openProvider: async () => { attempts++; return provider; },
+    marketReader, assetReader, computeCodeHash, nowSeconds: NOW + 70,
+  }), /stale/u);
+  assert.equal(attempts, 1, 'rejected RPC never creates a provider');
 });
