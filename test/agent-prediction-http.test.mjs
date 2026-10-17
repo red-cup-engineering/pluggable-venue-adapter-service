@@ -168,7 +168,10 @@ test('only matching independently settled fills produce canonical PAYMENT-RESPON
   const original=quote({resource:{url:origin+route+'/buy'}});
   const signed=payload(original);
   const settled={status:200,body:{status:'filled',transactionHash:N('6'),network:'eip155:84532',
-    market:A('c'),askId:'42',lots:'2',recipient:A('b'),amount:'1111000'}};
+    market:A('c'),askId:'42',lots:'2',recipient:A('b'),amount:'1111000',
+    sourceEconomicEvent:{type:'EvmAgentPredictionAskFilled',chain:'eip155:84532',
+      blockNumber:125,blockHash:N('8'),transactionHash:N('6'),logIndex:6,
+      emitter:A('c'),event:'AskFilled'}};
   const handler=create({active:true,admitBuyer:()=>true,settlementOperation:{execute:async()=>settled}});
   const response=await handler(post(route+'/buy',{'payment-signature':signed}));
   assert.equal(response.status,200);
@@ -197,4 +200,17 @@ test('deterministic custody preflight refusal is a real 409, never a fabricated 
     assert.deepEqual(await response.json(),{status:refusal,retryPayment:false});
     assert.equal(response.headers.get('PAYMENT-RESPONSE'),null);
   }
+});
+
+test('HTTP refuses a settlement without any original on-chain economic event provenance',async()=>{
+  const original=quote({resource:{url:origin+route+'/buy'}});
+  const signed=payload(original);
+  const fake={status:200,body:{status:'filled',transactionHash:N('6'),network:'eip155:84532',
+    market:A('c'),askId:'42',lots:'2',recipient:A('b'),amount:'1111000'}};
+  const handler=create({active:true,admitBuyer:()=>true,
+    settlementOperation:{execute:async()=>fake}});
+  const result=await handler(post(route+'/buy',{'payment-signature':signed}));
+  assert.equal(result.status,409);
+  assert.equal(result.headers.get('PAYMENT-RESPONSE'),null);
+  assert.equal((await result.json()).status,'settlement_receiving_conflict');
 });
