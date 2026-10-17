@@ -194,3 +194,21 @@ test('a signed earlier quote is faithfully re-read at its still-canonical block'
     ...f, pinnedQuoteBlock:127,pinnedQuoteBlockHash:HASH('8'),
   }),/existing numbered block/u);
 });
+
+test('quoted atomic amounts and ask quantities cannot lose precision as JavaScript numbers', async () => {
+  const unsafe = Number.MAX_SAFE_INTEGER + 2;
+  let f=fixtures();
+  f.lots=unsafe;
+  await assert.rejects(offerAgentOrderFromChain(f),/unsafe-precision/u);
+  f=fixtures();
+  f.askId=unsafe;
+  await assert.rejects(offerAgentOrderFromChain(f),/unsafe-precision/u);
+  f=fixtures();
+  const original=f.marketReader.quoteAsk;
+  f.marketReader.quoteAsk=async (...args)=>({...await original(...args),total:unsafe});
+  await assert.rejects(offerAgentOrderFromChain(f),/unsafe-precision/u);
+  f=fixtures();
+  const ask=f.marketReader.asks;
+  f.marketReader.asks=async (...args)=>({...await ask(...args),unitPrice:'0x86470'});
+  await assert.rejects(offerAgentOrderFromChain(f),/exact unsigned integer/u);
+});
