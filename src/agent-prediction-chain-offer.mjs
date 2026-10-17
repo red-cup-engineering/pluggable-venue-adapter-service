@@ -52,6 +52,7 @@ export async function offerAgentOrderFromChain({
   expectedMarketCodeHash, expectedAssetCodeHash,
   askId, lots, resource, nowSeconds = now(), maxBlockAgeSeconds = 30,
   maxTimeoutSeconds = 45, marketReader, assetReader, computeCodeHash,
+  pinnedQuoteBlock, pinnedQuoteBlockHash,
 } = {}) {
   if (!provider || typeof provider.getNetwork !== 'function'
       || typeof provider.getBlockNumber !== 'function' || typeof provider.getBlock !== 'function'
@@ -79,11 +80,24 @@ export async function offerAgentOrderFromChain({
   const network = await provider.getNetwork();
   const actualNetwork = 'eip155:' + BigInt(network.chainId).toString();
   if (actualNetwork !== expectedNetwork) throw new Error('EVM provider chain does not match admitted network');
-  const blockTag = await provider.getBlockNumber();
-  if (!Number.isSafeInteger(blockTag) || blockTag < 0) {
+  const latestBlock = await provider.getBlockNumber();
+  if (!Number.isSafeInteger(latestBlock) || latestBlock < 0) {
     throw new Error('EVM provider returned invalid block height');
   }
+  if (pinnedQuoteBlock !== undefined && (!Number.isSafeInteger(pinnedQuoteBlock) ||
+      pinnedQuoteBlock < 0 || pinnedQuoteBlock > latestBlock ||
+      !HASH.test(pinnedQuoteBlockHash ?? ''))) {
+    throw new TypeError('signed quote requires an existing numbered block and its exact hash');
+  }
+  if (pinnedQuoteBlock === undefined && pinnedQuoteBlockHash !== undefined) {
+    throw new TypeError('signed quote block hash cannot be supplied without its block number');
+  }
+  const blockTag = pinnedQuoteBlock ?? latestBlock;
   const block = await provider.getBlock(blockTag);
+  if (pinnedQuoteBlockHash !== undefined &&
+      block?.hash?.toLowerCase() !== pinnedQuoteBlockHash.toLowerCase()) {
+    throw new Error('signed quote block changed canonical identity');
+  }
   if (!block || !Number.isSafeInteger(block.timestamp)
       || block.timestamp > nowSeconds + 15 || nowSeconds - block.timestamp > maxBlockAgeSeconds
       || !HASH.test(block.hash ?? '')) {
