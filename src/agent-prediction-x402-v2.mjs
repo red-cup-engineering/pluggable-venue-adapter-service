@@ -199,6 +199,29 @@ export function signedAgentOrderQuoteLocator(header) {
   });
 }
 
+/** One original finalized EVM economic event, NOT a TypedCommitment,
+ * customer acceptance or publication authority. Other stages retain custody
+ * of the original chain receipt and may cite this coordinate without inventing
+ * another payment ledger. */
+export function exactMarketFillSourceEvent(value, {network,market,transactionHash}={}) {
+  if (value?.type !== 'EvmAgentPredictionAskFilled' || value.event !== 'AskFilled'
+      || value.chain !== network || !CAIP2.test(value.chain ?? '')
+      || !Number.isSafeInteger(value.blockNumber) || value.blockNumber < 0
+      || !Number.isSafeInteger(value.logIndex) || value.logIndex < 0
+      || !HASH.test(value.blockHash ?? '') || !HASH.test(value.transactionHash ?? '')
+      || !ADDRESS.test(value.emitter ?? '')
+      || value.transactionHash.toLowerCase() !== transactionHash?.toLowerCase()
+      || value.emitter.toLowerCase() !== market?.toLowerCase()) {
+    throw new TypeError('economic fill needs its exact original finalized chain event coordinate');
+  }
+  return Object.freeze({
+    type:'EvmAgentPredictionAskFilled',chain:network,
+    blockNumber:value.blockNumber,blockHash:value.blockHash.toLowerCase(),
+    transactionHash:value.transactionHash.toLowerCase(),logIndex:value.logIndex,
+    emitter:value.emitter.toLowerCase(),event:'AskFilled',
+  });
+}
+
 function pending(stage, submitted = {}) {
   return Object.freeze({
     status: 202,
@@ -266,10 +289,18 @@ export async function settleAgentOrder({
     && observed.feesSettled === true
     && observed.backingConserved === true;
   if (!same) throw new Error('independent market receipt contradicts the signed payment, shares or fee accounting');
+  let sourceEconomicEvent;
+  try {
+    sourceEconomicEvent=exactMarketFillSourceEvent(observed.sourceEconomicEvent,{
+      network:quoted.network,market:quoted.payTo,transactionHash:submitted.transactionHash,
+    });
+  } catch {
+    throw new Error('independent market receipt lacks original finalized economic event provenance');
+  }
   return Object.freeze({
     status: 200,
     body: Object.freeze({ status: 'filled', transactionHash: submitted.transactionHash,
       network: quoted.network, market: quoted.payTo, askId: e.askId, lots: e.lots,
-      recipient: intent.buyer, amount: quoted.amount }),
+      recipient: intent.buyer, amount: quoted.amount, sourceEconomicEvent }),
   });
 }
