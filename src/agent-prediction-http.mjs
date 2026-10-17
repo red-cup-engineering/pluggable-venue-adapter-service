@@ -147,6 +147,13 @@ export function createAgentPredictionOrderHttpHandler({
         instruction, paymentSignatureHeader: signature, challenge,
         marketId, askId, lots,
       });
+      // Fresh deterministic refusals are not ambiguous settlements. In
+      // particular the native custody callback may have rejected the market
+      // source, both signatures, or the sponsor fee ceiling BEFORE signing.
+      if (result?.status === 409 && ['order_intent_conflict', 'preflight_refused']
+          .includes(result.body?.status) && result.body?.retryPayment === false) {
+        return json(409, result.body);
+      }
       if (result?.status !== 200 && result?.status !== 202) {
         throw new TypeError('custody owner did not return a legitimate order state');
       }
