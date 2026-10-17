@@ -132,3 +132,33 @@ test('a live loopback HTTP transport can actually consume the same Fetch applica
     assert.equal((await response.json()).quote.amount,'1111000');
   }finally{server.close();await once(server,'close');}
 });
+
+
+test('signed buyer payment reuses its exact recent source block after chain advancement',async()=>{
+  let latest=125, pinnedReads=0, executions=0;
+  const moving=({resource,pinnedQuoteBlock,pinnedQuoteBlockHash})=>{
+    const requestedBlock=pinnedQuoteBlock??latest;
+    if(pinnedQuoteBlock !== undefined){
+      pinnedReads++;
+      if(pinnedQuoteBlockHash !== N('8')) throw Error('reorganization');
+    }
+    const q=quote({resource});
+    const original=JSON.parse(Buffer.from(q.headers['PAYMENT-REQUIRED'],'base64'));
+    original.accepts[0].extra.quoteBlock=String(requestedBlock);
+    original.accepts[0].extra.quoteBlockHash=N('8');
+    return {...q,headers:{'PAYMENT-REQUIRED':Buffer.from(JSON.stringify(original)).toString('base64')}};
+  };
+  const handler=create({active:true,quoteMarket:moving,admitBuyer:()=>true,
+    settlementOperation:{execute:async()=>{
+      executions++;
+      return {status:202,body:{status:'settlement_pending',retryPayment:false}};
+    }}});
+  const challenge=await handler(post(route+'/buy'));
+  assert.equal(challenge.status,402);
+  const signed=payload({headers:{'PAYMENT-REQUIRED':challenge.headers.get('PAYMENT-REQUIRED')}});
+  latest=126;
+  const paid=await handler(post(route+'/buy',{'payment-signature':signed}));
+  assert.equal(paid.status,202);
+  assert.equal(pinnedReads,1);
+  assert.equal(executions,1);
+});
