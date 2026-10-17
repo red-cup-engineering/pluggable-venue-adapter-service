@@ -20,7 +20,9 @@
     "./gmx-public-reader": "./src/gmx/public-reader.mjs",
     "./gmx-wallet-observation": "./src/gmx/wallet-observation.mjs",
     "./gmx-rewards": "./data/gmx/rewards.mjs",
-    "./gmx-fee-harvest": "./src/gmx/fee-harvest.mjs"
+    "./gmx-fee-harvest": "./src/gmx/fee-harvest.mjs",
+    "./agent-prediction-x402-v2": "./src/agent-prediction-x402-v2.mjs",
+    "./src/agent-prediction-x402-v2.mjs": "./src/agent-prediction-x402-v2.mjs"
   },
   "files": [
     "src/",
@@ -28,7 +30,7 @@
   ],
   "name": "@red-cup-engineering/pluggable-venue-adapter-service",
   "scripts": {
-    "check": "node --check src/alpaca-adapter.mjs && node --check src/alpaca-broker-admin.mjs && node --check src/kalshi-adapter.mjs && node --check src/gmx-adapter.mjs",
+    "check": "node --check src/alpaca-adapter.mjs && node --check src/alpaca-broker-admin.mjs && node --check src/kalshi-adapter.mjs && node --check src/gmx-adapter.mjs && node --check src/agent-prediction-x402-v2.mjs && node --check test/agent-prediction-x402-v2.test.mjs",
     "test": "node --test test/*.test.mjs"
   },
   "type": "module",
