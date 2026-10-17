@@ -28,16 +28,20 @@
   },
   "files": [
     "src/",
-    "data/"
+    "data/",
+    "scripts/"
   ],
   "name": "@red-cup-engineering/pluggable-venue-adapter-service",
   "scripts": {
-    "check": "node --check src/alpaca-adapter.mjs && node --check src/alpaca-broker-admin.mjs && node --check src/kalshi-adapter.mjs && node --check src/gmx-adapter.mjs && node --check src/agent-prediction-x402-v2.mjs && node --check test/agent-prediction-x402-v2.test.mjs && node --check src/agent-prediction-chain-offer.mjs && node --check test/agent-prediction-chain-offer.test.mjs",
+    "check": "node --check src/alpaca-adapter.mjs && node --check src/alpaca-broker-admin.mjs && node --check src/kalshi-adapter.mjs && node --check src/gmx-adapter.mjs && node --check src/agent-prediction-x402-v2.mjs && node --check test/agent-prediction-x402-v2.test.mjs && node --check src/agent-prediction-chain-offer.mjs && node --check test/agent-prediction-chain-offer.test.mjs && node --check scripts/quote-agent-prediction-order.mjs",
     "test": "node --test test/*.test.mjs",
     "test:prediction-order": "node --test test/agent-prediction-x402-v2.test.mjs test/agent-prediction-chain-offer.test.mjs",
-    "check:prediction-order": "node --check src/agent-prediction-x402-v2.mjs && node --check src/agent-prediction-chain-offer.mjs && node --check test/agent-prediction-x402-v2.test.mjs && node --check test/agent-prediction-chain-offer.test.mjs"
+    "check:prediction-order": "node --check src/agent-prediction-x402-v2.mjs && node --check src/agent-prediction-chain-offer.mjs && node --check test/agent-prediction-x402-v2.test.mjs && node --check test/agent-prediction-chain-offer.test.mjs && node --check scripts/quote-agent-prediction-order.mjs"
   },
   "type": "module",
   "version": "0.1.7",
-  "private": false
+  "private": false,
+  "bin": {
+    "quote-agent-prediction-order": "./scripts/quote-agent-prediction-order.mjs"
+  }
 }
