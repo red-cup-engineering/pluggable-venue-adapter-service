@@ -22,6 +22,11 @@ const requirement = {
     buyIntentEip712Domain: { name: '561 Agent Prediction Market PoC', version: '1' },
   },
 };
+const EVENT = Object.freeze({
+  type:'EvmAgentPredictionAskFilled',chain:'eip155:84532',
+  blockNumber:125,blockHash:NONCE('8'),transactionHash:NONCE('6'),
+  logIndex:6,emitter:ADDR('c'),event:'AskFilled',
+});
 const PAY = {
   buyIntent: {
     buyer: ADDR('b'), askId: '42', lots: '2', maxTotal: '1111000',
@@ -53,7 +58,7 @@ function independent(overrides = {}) {
     maker: ADDR('2'), provider: ADDR('1'), protocolRecipient: ADDR('3'),
     makerAmount: '1100000', providerFee: '4400', protocolFee: '6600',
     authorizationNonceConsumed: true, buyerDebited: true, sharesReceived: true,
-    feesSettled: true, backingConserved: true, ...overrides,
+    feesSettled: true, backingConserved: true, sourceEconomicEvent:EVENT, ...overrides,
   };
 }
 const submit = (more = {}) => ({ status: 'submitted', transactionHash: NONCE('6'),
@@ -135,6 +140,7 @@ test('custom facilitator is invoked once and complete independent receipt gates 
   assert.deepEqual(result.body, {
     status: 'filled', transactionHash: NONCE('6'), network: 'eip155:84532',
     market: ADDR('c'), askId: '42', lots: '2', recipient: ADDR('b'), amount: '1111000',
+    sourceEconomicEvent:EVENT,
   });
 });
 
@@ -224,5 +230,18 @@ test('oversized or noncanonical base64 cannot reach facilitator', async () => {
       facilitator: async () => { calls++; return submit(); },
     }));
     assert.equal(calls, 0);
+  }
+});
+
+test('finalized payments without original economic source-event coordinate cannot claim delivery', async()=>{
+  const { offered, header }=signed();
+  for(const sourceEconomicEvent of [undefined,
+    {...EVENT,logIndex:-1},{...EVENT,blockHash:'0x42'},
+    {...EVENT,transactionHash:NONCE('9')},{...EVENT,emitter:ADDR('9')},
+    {...EVENT,type:'TypedCommitment'},
+  ]) {
+    await assert.rejects(settleAgentOrder({challenge:offered,paymentSignatureHeader:header,
+      nowSeconds,facilitator:async()=>submit(),independentReceipt:async()=>independent({sourceEconomicEvent})
+    }),/original finalized economic event provenance/u);
   }
 });
