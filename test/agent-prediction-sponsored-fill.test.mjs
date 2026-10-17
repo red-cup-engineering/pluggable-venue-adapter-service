@@ -198,3 +198,14 @@ test('wrong quote, order or beneficiary never requests account custody',async()=
   assert.equal(bad.status,409);
   assert.equal(events.filter(e=>e[0]==='custody').length,0);
 });
+
+test('financial gas sponsor limits cannot be imprecise JavaScript numbers',()=>{
+  const cfg=setup().operation;
+  assert.equal(typeof cfg.execute,'function');
+  assert.throws(()=>createCustodiedAgentPredictionSettlement({
+    network,marketAddress:market,assetAddress:asset,marketCodeHash:N('8'),assetCodeHash:N('9'),
+    sponsorAddress:sponsor,maxGasLimit:Number.MAX_SAFE_INTEGER+2,maxFeePerGasWei:'10000000000',
+    maxGasCostWei:'100000000000000000000000',provider:{getNetwork(){}},
+    custody:{execute(){}},prepareSignedFill() {},independentReceipt() {},
+  }),/imprecise JavaScript numeric amounts/u);
+});
