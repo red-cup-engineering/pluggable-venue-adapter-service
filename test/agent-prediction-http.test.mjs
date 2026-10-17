@@ -162,3 +162,26 @@ test('signed buyer payment reuses its exact recent source block after chain adva
   assert.equal(pinnedReads,1);
   assert.equal(executions,1);
 });
+
+
+test('only matching independently settled fills produce canonical PAYMENT-RESPONSE on HTTP 200',async()=>{
+  const original=quote({resource:{url:origin+route+'/buy'}});
+  const signed=payload(original);
+  const settled={status:200,body:{status:'filled',transactionHash:N('6'),network:'eip155:84532',
+    market:A('c'),askId:'42',lots:'2',recipient:A('b'),amount:'1111000'}};
+  const handler=create({active:true,admitBuyer:()=>true,settlementOperation:{execute:async()=>settled}});
+  const response=await handler(post(route+'/buy',{'payment-signature':signed}));
+  assert.equal(response.status,200);
+  const head=response.headers.get('PAYMENT-RESPONSE');
+  assert.ok(head);
+  assert.deepEqual(JSON.parse(Buffer.from(head,'base64')),{
+    success:true,transaction:N('6'),network:'eip155:84532',payer:A('b'),
+  });
+  assert.equal((await response.json()).status,'filled');
+  const forged=create({active:true,admitBuyer:()=>true,
+    settlementOperation:{execute:async()=>({status:200,body:{...settled.body,amount:'999'}})}});
+  const refused=await forged(post(route+'/buy',{'payment-signature':signed}));
+  assert.equal(refused.status,409);
+  assert.equal(refused.headers.get('PAYMENT-RESPONSE'),null);
+  assert.deepEqual(await refused.json(),{status:'settlement_receiving_conflict',retryPayment:false});
+});
