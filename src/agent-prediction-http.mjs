@@ -150,7 +150,28 @@ export function createAgentPredictionOrderHttpHandler({
       if (result?.status !== 200 && result?.status !== 202) {
         throw new TypeError('custody owner did not return a legitimate order state');
       }
-      return json(result.status, result.body);
+      if (result.status === 202) {
+        return json(202, { status: result.body?.status === 'independent_receiving_pending'
+          ? 'independent_receiving_pending' : 'settlement_pending', retryPayment: false });
+      }
+      const filled = result.body;
+      const intent = instruction.packet.payload.buyIntent;
+      const accepted = instruction.requirement;
+      if (filled?.status !== 'filled' || !/^0x[0-9a-fA-F]{64}$/u.test(filled.transactionHash ?? '') ||
+          filled.network !== accepted.network ||
+          filled.market?.toLowerCase() !== accepted.payTo.toLowerCase() ||
+          filled.askId !== accepted.extra.askId || filled.lots !== accepted.extra.lots ||
+          filled.recipient?.toLowerCase() !== intent.buyer.toLowerCase() ||
+          filled.amount !== accepted.amount) {
+        return json(409, { status: 'settlement_receiving_conflict', retryPayment: false });
+      }
+      const response = {
+        success: true, transaction: filled.transactionHash,
+        network: filled.network, payer: intent.buyer,
+      };
+      return json(200, filled, {
+        'PAYMENT-RESPONSE': Buffer.from(JSON.stringify(response)).toString('base64'),
+      });
     } catch {
       // An exception after a possible broadcast MUST NOT invite a second payment.
       return json(202, { status: 'settlement_pending', retryPayment: false });
