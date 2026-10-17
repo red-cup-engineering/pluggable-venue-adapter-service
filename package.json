@@ -44,10 +44,15 @@
     "serve:prediction-quotes": "node scripts/serve-agent-prediction-read-only.mjs"
   },
   "type": "module",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "private": false,
   "bin": {
     "quote-agent-prediction-order": "./scripts/quote-agent-prediction-order.mjs",
     "serve-agent-prediction-read-only": "./scripts/serve-agent-prediction-read-only.mjs"
+  },
+  "publishConfig": {
+    "registry": "https://registry.561.group/",
+    "access": "public",
+    "provenance": true
   }
 }
