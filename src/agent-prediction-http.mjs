@@ -1,4 +1,4 @@
-import { readAgentOrderPayment, signedAgentOrderQuoteLocator } from './agent-prediction-x402-v2.mjs';
+import { readAgentOrderPayment, signedAgentOrderQuoteLocator, exactMarketFillSourceEvent } from './agent-prediction-x402-v2.mjs';
 import { offerAgentOrderFromChain } from './agent-prediction-chain-offer.mjs';
 
 // Domain-owned Fetch interface. The site/web transport remains with its
@@ -171,6 +171,15 @@ export function createAgentPredictionOrderHttpHandler({
           filled.recipient?.toLowerCase() !== intent.buyer.toLowerCase() ||
           filled.amount !== accepted.amount) {
         return json(409, { status: 'settlement_receiving_conflict', retryPayment: false });
+      }
+      // Never let a caller-supplied settlement operation fabricate an HTTP 200
+      // without the exact on-chain economic event needed by downstream services.
+      try {
+        exactMarketFillSourceEvent(filled.sourceEconomicEvent,{
+          network:accepted.network,market:accepted.payTo,transactionHash:filled.transactionHash,
+        });
+      } catch {
+        return json(409, { status:'settlement_receiving_conflict', retryPayment:false });
       }
       const response = {
         success: true, transaction: filled.transactionHash,
