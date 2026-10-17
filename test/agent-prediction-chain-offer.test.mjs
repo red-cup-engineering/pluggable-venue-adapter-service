@@ -173,3 +173,24 @@ test('command refuses foreign/insecure read RPC or an unauthenticated consumer c
   }), /stale/u);
   assert.equal(attempts, 1, 'rejected RPC never creates a provider');
 });
+
+
+test('a signed earlier quote is faithfully re-read at its still-canonical block', async () => {
+  const f = fixtures();
+  f.provider.getBlockNumber = async () => 126;
+  f.provider.getBlock = async height => {
+    assert.equal(height, 125);
+    return { timestamp: NOW - 3, hash: HASH('8') };
+  };
+  const offer = await offerAgentOrderFromChain({
+    ...f, pinnedQuoteBlock: 125, pinnedQuoteBlockHash: HASH('8'),
+  });
+  const signedQuote=JSON.parse(Buffer.from(offer.headers['PAYMENT-REQUIRED'],'base64'));
+  assert.equal(signedQuote.accepts[0].extra.quoteBlock,'125');
+  await assert.rejects(offerAgentOrderFromChain({
+    ...f, pinnedQuoteBlock:125,pinnedQuoteBlockHash:HASH('9'),
+  }),/canonical identity/u);
+  await assert.rejects(offerAgentOrderFromChain({
+    ...f, pinnedQuoteBlock:127,pinnedQuoteBlockHash:HASH('8'),
+  }),/existing numbered block/u);
+});
