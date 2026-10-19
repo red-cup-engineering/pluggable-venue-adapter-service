@@ -9,8 +9,7 @@
   "description": "pluggable-venue-adapter-service sovereign enterprise",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/red-cup-engineering/prediction-market-engineering-services-section.git",
-    "directory": "services/pluggable-venue-adapter-service"
+    "url": "git+https://github.com/red-cup-engineering/pluggable-venue-adapter-service.git"
   },
   "exports": {
     "./alpaca": "./src/alpaca-adapter.mjs",
