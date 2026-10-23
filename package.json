@@ -48,7 +48,7 @@
     "serve:prediction-quotes": "node scripts/serve-agent-prediction-read-only.mjs"
   },
   "type": "module",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "private": false,
   "bin": {
     "quote-agent-prediction-order": "./scripts/quote-agent-prediction-order.mjs",
