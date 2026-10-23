@@ -43,11 +43,33 @@ function currentQuote(quote,at){
  positive(quote.amountInWei,'input');positive(quote.amountOutAtomic,'output');
 }
 
-/** Executable pool quotes and unsigned preparation use the upstream fixed-block reader.
+/** Public account and executable pool quotes share the upstream fixed-block reader.
  * This adapter holds no signing key and supplies no authority or capital. */
 export function createBaseSpotAdapter({readPool,clock=()=>new Date().toISOString()}={}){
  if(readPool?.chain?.id!==BASE_SPOT.chainId||typeof readPool.requestAtBoundary!=='function')throw new TypeError('base-fixed-block-reader-required');
  const call=async(request,{request:rpc})=>rpc(request);
+ const balanceCall=(token)=>({method:'eth_call',params:[{to:token,data:erc20.encodeFunctionData('balanceOf',[BASE_SPOT.address])}]});
+ async function readAccount({tokens=[]}={}){
+  if(!Array.isArray(tokens)||tokens.length>BASE_SPOT.maximumObservedTokens||tokens.some(token=>typeof token!=='string'))throw new TypeError('bounded-base-token-addresses-required');
+  const declared=tokens.map(getAddress).sort();if(new Set(declared).size!==declared.length)throw new TypeError('unique-base-token-addresses-required');
+  const observedAt=clock();const reading=await readPool.requestAtBoundary({operation:async ctx=>{
+   const balances={nativeBalanceWei:await call({method:'eth_getBalance',params:[BASE_SPOT.address]},ctx),usdcBalance:await call(balanceCall(BASE_SPOT.usdc),ctx),wrappedEtherBalance:await call(balanceCall(BASE_SPOT.wrappedEther),ctx),tokenBalances:[]};
+   // Public calls only, four at a time, all pinned by the same upstream carrier.
+   for(let i=0;i<declared.length;i+=4){const batch=await Promise.allSettled(declared.slice(i,i+4).map(async token=>{
+     const balanceAtomic=erc20.decodeFunctionResult('balanceOf',await call(balanceCall(token),ctx))[0].toString();
+     try{const decimals=Number(erc20.decodeFunctionResult('decimals',await call({method:'eth_call',params:[{to:token,data:erc20.encodeFunctionData('decimals',[])}]},ctx))[0]);return {token,balanceAtomic,decimals,decimalsStatus:'observed'};}
+     catch(error){if(['PUBLIC_EVM_PROVIDER_READ_FAILED','PUBLIC_EVM_READ_LIMIT'].includes(error?.code))throw error;return {token,balanceAtomic,decimals:null,decimalsStatus:'refused',decimalsReason:error.message};}
+    }));
+    const providerFailure=batch.find(result=>result.status==='rejected'&&['PUBLIC_EVM_PROVIDER_READ_FAILED','PUBLIC_EVM_READ_LIMIT'].includes(result.reason?.code));
+    if(providerFailure)throw providerFailure.reason;
+    batch.forEach((result,j)=>balances.tokenBalances.push(result.status==='fulfilled'?{...result.value,status:'observed'}:{token:declared[i+j],status:'refused',reason:result.reason.message}));
+   }
+   return balances;
+  }});
+  return record({type:'BaseSpotAccountObservation',chainId:8453,address:BASE_SPOT.address,observedAt,finality:'pinned-block-not-finalized',boundary:reading.boundary,provider:reading.provider,
+   nativeBalanceWei:BigInt(reading.value.nativeBalanceWei).toString(),usdcBalanceAtomic:erc20.decodeFunctionResult('balanceOf',reading.value.usdcBalance)[0].toString(),wrappedEtherBalanceWei:erc20.decodeFunctionResult('balanceOf',reading.value.wrappedEtherBalance)[0].toString(),tokenBalances:reading.value.tokenBalances,
+   coverage:{scope:'native ETH, native USDC, WETH and explicitly declared ERC-20 balances',fullWallet:false,usdValuation:false,nftAndProtocolPositions:false,declaredTokens:declared},attempts:reading.attempts,failures:reading.failures});
+ }
  async function quoteNativeToUsdc({amountInWei,fee=500}={}){
   const amount=positive(amountInWei,'input');if(![100,500,3000,10000].includes(fee))throw new RangeError('uniswap-fee-tier-required');
   const observedAt=clock();const reading=await readPool.requestAtBoundary({blockTag:'latest',operation:async ctx=>({
@@ -93,7 +115,7 @@ export function createBaseSpotAdapter({readPool,clock=()=>new Date().toISOString
   return record({type:'BaseNativeUsdcExecutionPreparation',quote:quote.id,observedAt,chainId:8453,address:BASE_SPOT.address,boundary:reading.boundary,provider:reading.provider,...reading.value,nonceDisposition:'observed-at-pinned-block-recheck-pending-before-signing',authorityAdmissionRequired:true,signed:false,broadcast:false,
    sources:[...BASE_SPOT.sources,'https://specs.optimism.io/protocol/fjord/predeploys.html','https://raw.githubusercontent.com/ethereum-optimism/optimism/develop/packages/contracts-bedrock/src/L2/GasPriceOracle.sol']});
  }
- return Object.freeze({quoteNativeToUsdc,prepareNativeUsdcSwap});
+ return Object.freeze({readAccount,quoteNativeToUsdc,prepareNativeUsdcSwap});
 }
 
 /** Restricted calldata, never an arbitrary router call or token approval.
