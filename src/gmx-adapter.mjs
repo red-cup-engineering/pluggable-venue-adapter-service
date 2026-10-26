@@ -28,11 +28,9 @@
  * 0x1675...A712 and SyntheticsReader 0xfA26...4184 ABIs on Arbiscan/Blockscout. A contract upgrade changes
  * shapes: the adapter pins the function signatures it encodes in `GMX_SIGNATURES`, and the shared ethers codec encodes them.
  */
-import { semanticIdOf } from "@red-cup-engineering/computer-data-engineering-services-section/semiotic-expression-notation/semantic-content-identity";
+import { identifyVenueRecord as identify, snapshotVenueData, captureVenueOperations } from './venue-record.mjs';
 import { allocationFor, allocationsFor } from '@red-cup-engineering/mandate-portfolio-allocation-service/market-game';
 
-const semanticId = semanticIdOf("brokerage.pluggable-venue-adapter.record");
-const identify = (body) => ({ id: semanticId(body), ...body });
 const CREDENTIAL_FIELDS = new Set(["authorization", "apikey", "apikeyid", "apisecret", "clientid", "clientsecret", "secret", "token", "accesstoken", "refreshtoken", "privatekey", "privatekeypath", "mnemonic", "seedphrase", "keystore", "password"]);
 // "token" is a credential word in HTTP APIs but an address field name here (initialCollateralToken, longToken), so
 // only a key that IS or ENDS WITH a credential word is refused, except the ABI/venue fields that end in "Token".
@@ -91,6 +89,7 @@ function enforceValue(grant, valueUsd) {
  *   fetchJson: GET returning parsed JSON, used for GMX's public REST (markets/info, prices/tickers).
  */
 export function createGmxAdapter({ chainId = 42161, rpc, fetchJson, blockTag = "latest" } = {}) {
+  ({chainId,blockTag} = snapshotVenueData({chainId,blockTag}));
   const chain = GMX_CHAINS[chainId];
   if (!chain || typeof rpc !== "function") throw new TypeError("gmx-adapter-configuration-invalid");
   const ethCall = (to, data) => rpc({ method: "eth_call", params: [{ to, data }, blockTag] });
@@ -100,7 +99,7 @@ export function createGmxAdapter({ chainId = 42161, rpc, fetchJson, blockTag = "
   const read = async ({ grant, scope, method, path, run, now = new Date().toISOString(), operation = {} }) => {
     admit(grant, scope, { method, path, ...operation }, now, chainId);
     let outcome = "accepted", payload, error = null;
-    try { payload = await run(); } catch (failure) { outcome = "refused"; error = { code: failure?.code ?? "venue-read-failed", detail: String(failure?.message ?? failure) }; }
+    try { payload = await run(grant,operation); } catch (failure) { outcome = "refused"; error = { code: failure?.code ?? "venue-read-failed", detail: String(failure?.message ?? failure) }; }
     return Object.freeze(identify({ type: "GmxVenueOperationReceipt", version: 1, venue: "gmx", chainId, grant: grant.id, scope, method, path, outcome, observedAt: now, payload: clean(payload) ?? null, error, signed: false, credentialReference: grant.credentialReference ?? null, credentialsExported: false }));
   };
   const build = ({ grant, scope, kind, now = new Date().toISOString(), operation, run }) => {
@@ -126,7 +125,7 @@ export function createGmxAdapter({ chainId = 42161, rpc, fetchJson, blockTag = "
   };
   const requireFee = (fee) => { if (!(integer(fee) > 0n)) throw new RangeError("execution-fee-required"); return integer(fee); };
 
-  return Object.freeze({
+  return captureVenueOperations({
     chain,
     /** Claim accrued v1 fees to the account. No token approval, deposit, swap, or staking. */
     buildFeeClaim: ({ grant, valueUsd, now = new Date().toISOString() }) => {
@@ -140,11 +139,11 @@ export function createGmxAdapter({ chainId = 42161, rpc, fetchJson, blockTag = "
     },
     /** Native gas balance and the stablecoin/collateral token balances named in `tokens`. */
     readAccount: ({ grant, tokens = [chain.usdc, chain.wnt], now }) => read({ grant, scope: "account:read", method: "eth_getBalance+balanceOf", path: `eip155:${chainId}/${grant.account}`, now, operation: { tokens },
-      run: async () => ({ account: grant.account, nativeWei: BigInt(await rpc({ method: "eth_getBalance", params: [grant.account, blockTag] })).toString(), tokens: await Promise.all(tokens.map(async (token) => ({ token, raw: (await balanceOf(token, grant.account)).toString() }))) }) }),
+      run: async (grant,{tokens}) => ({ account: grant.account, nativeWei: BigInt(await rpc({ method: "eth_getBalance", params: [grant.account, blockTag] })).toString(), tokens: await Promise.all(tokens.map(async (token) => ({ token, raw: (await balanceOf(token, grant.account)).toString() }))) }) }),
     listPositions: ({ grant, now }) => read({ grant, scope: "positions:read", method: "eth_call", path: `${chain.reader}#getAccountPositions`, now,
-      run: async () => { const positions = decodeAccountPositions(await ethCall(chain.reader, call("getAccountPositions", ["address", "address", "uint256", "uint256"], [chain.dataStore, grant.account, 0, 100]))); return { positions, range: { start: 0, end: 100, complete: positions.length < 100 } }; } }),
+      run: async (grant) => { const positions = decodeAccountPositions(await ethCall(chain.reader, call("getAccountPositions", ["address", "address", "uint256", "uint256"], [chain.dataStore, grant.account, 0, 100]))); return { positions, range: { start: 0, end: 100, complete: positions.length < 100 } }; } }),
     listOrders: ({ grant, now }) => read({ grant, scope: "orders:read", method: "eth_call", path: `${chain.reader}#getAccountOrders`, now,
-      run: async () => { const orders = decodeAccountOrders(await ethCall(chain.reader, call("getAccountOrders", ["address", "address", "uint256", "uint256"], [chain.dataStore, grant.account, 0, 100]))); return { orders, range: { start: 0, end: 100, complete: orders.length < 100 } }; } }),
+      run: async (grant) => { const orders = decodeAccountOrders(await ethCall(chain.reader, call("getAccountOrders", ["address", "address", "uint256", "uint256"], [chain.dataStore, grant.account, 0, 100]))); return { orders, range: { start: 0, end: 100, complete: orders.length < 100 } }; } }),
     /** GMX public REST: market list and oracle tickers, for sizing and mark values. */
     readMarkets: ({ grant, now }) => {
       if (typeof fetchJson !== "function") throw new TypeError("gmx-adapter-fetch-required");

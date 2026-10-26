@@ -22,15 +22,14 @@
  * the same admission without writing. Every write carries the caller's client
  * order id, so a venue that sees it twice places once.
  */
-import { semanticIdOf } from "@red-cup-engineering/computer-data-engineering-services-section/semiotic-expression-notation/semantic-content-identity";
+import { isDeepStrictEqual } from 'node:util';
+import { identifyVenueRecord as identify, snapshotVenueData, captureVenueOperations } from './venue-record.mjs';
 import {
   kalshiRiskContractBounds, kalshiOrderRiskCents,
   kalshiRestingRiskCents, kalshiAccountRiskInputs,
   kalshiUsdCeilCents, kalshiPriceCents, kalshiCountNumber,
 } from './kalshi-risk-law.mjs';
 
-const semanticId = semanticIdOf("brokerage.pluggable-venue-adapter.record");
-const identify = (body) => ({ id: semanticId(body), ...body });
 const CREDENTIAL_FIELDS = new Set(["authorization", "apikey", "apikeyid", "apisecret", "clientid", "clientsecret", "secret", "token", "accesstoken", "refreshtoken", "privatekey", "privatekeypath", "password"]);
 const credentialField = (key) => { const normalized = String(key).toLowerCase().replace(/[-_\s]/gu, ""); return [...CREDENTIAL_FIELDS, "apisecretkey"].some((suffix) => normalized === suffix || normalized.endsWith(suffix)); };
 function rejectCredentials(value, seen = new Set()) { if (!value || typeof value !== "object" || seen.has(value)) return; seen.add(value); for (const [key, member] of Object.entries(value)) { if (credentialField(key)) throw new TypeError("credential-bearing-venue-request-refused"); rejectCredentials(member, seen); } }
@@ -198,7 +197,7 @@ export function createKalshiAdapter({ client } = {}) {
     return Object.freeze(identify({ type: "KalshiVenueOperationReceipt", version: 1, venue: "kalshi", grant: grant.id, scope, method, path, outcome, status, observedAt: now,
       payload: clean(payload) ?? null, error, credentialReference: grant.credentialReference ?? null, credentialsExported: false }));
   };
-  return Object.freeze({
+  return captureVenueOperations({
     readAccount: ({ grant, now }) => call({ grant, scope: "account:read", method: "GET", path: "/portfolio/balance", run: () => client.getBalance(), now }),
     listPositions: ({ grant, now }) => call({ grant, scope: "positions:read", method: "GET", path: "/portfolio/positions", run: () => client.getPositions({ count_filter: "position" }), now }),
     listRestingOrders: ({ grant, now }) => call({ grant, scope: "orders:read", method: "GET", path: "/portfolio/orders?status=resting", run: () => client.getOrders({ status: "resting" }).then((orders) => ({ orders })), now }),
@@ -207,8 +206,15 @@ export function createKalshiAdapter({ client } = {}) {
       const verdict = await admitUnderContract({ grant, contract, order, now });
       return Object.freeze(identify({ type: "KalshiOrderPreflight", version: 1, venue: "kalshi", grant: grant.id, principalContract: contract.id, order: clean(order), verdict, observedAt: now }));
     },
-    placeOrder: async ({ grant, contract, order, now = new Date().toISOString() }) => {
+    placeOrder: async ({ grant, contract, order, now = new Date().toISOString() }, callerInput) => {
       const verdict = await admitUnderContract({ grant, contract, order, now });
+      // A grant is data, not a live revocation service. Preserve the existing
+      // mid-flight refusal when its caller revokes or replaces the policy;
+      // neither the old grant nor a newly broadened contract may authorize this write.
+      const currentPolicy = snapshotVenueData(callerInput);
+      if (!isDeepStrictEqual(currentPolicy.grant,grant)
+        || !isDeepStrictEqual(currentPolicy.contract,contract))
+        throw new TypeError('kalshi-order-authority-or-contract-changed');
       if (!verdict.ok) return Object.freeze(identify({ type: "KalshiVenueOperationReceipt", version: 1, venue: "kalshi", grant: grant.id, scope: "orders:live", method: "POST", path: "/portfolio/events/orders",
         outcome: "refused-by-contract", status: null, observedAt: now, payload: null, error: { code: "principal-contract-refused", detail: verdict.reason, venueWrite: false }, credentialReference: grant.credentialReference ?? null, credentialsExported: false }));
       return call({ grant, scope: "orders:live", method: "POST", path: "/portfolio/events/orders", operation: { order }, run: () => client.createOrder({ ...order }), now });
