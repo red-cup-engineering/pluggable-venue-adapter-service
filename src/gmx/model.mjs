@@ -25,15 +25,29 @@ export function decodeAccountOrders(result) {
  * The account as one venue-neutral reading in cents, like normalizeKalshiAccount. Cash is the free stablecoin
  * (USDC) wallet balance; equity adds position collateral (at par for stablecoin collateral), GM/GLV/other
  * holdings at their stated USD value, and excludes native gas ETH (it is not tradable capital).
- * @param {{usdcAmount: number, positions: object[], holdingsUsd?: number, nativeUsd?: number}} reading
+ * Equity remains unknown when any held position has unvalued collateral; known cash and each position's
+ * own valuation remain available. Supplied USD values and normalized numerical outputs must be finite.
+ * @param {{usdcAmount: number, positions?: object[], holdingsUsd?: number, nativeUsd?: number, stablecoins?: string[]}} reading
+ * @returns {{cashCents: number, equityCents: number|null, freeCashCents: number, gasUsd: number, positions: object[]}}
  */
 export function normalizeGmxAccount({ usdcAmount, positions = [], holdingsUsd = 0, nativeUsd = 0, stablecoins = [] } = {}) {
   if (!Number.isFinite(usdcAmount)) throw new TypeError("gmx-usdc-balance-required");
+  if (!Number.isFinite(holdingsUsd)) throw new TypeError("gmx-holdings-value-required");
+  if (!Number.isFinite(nativeUsd)) throw new TypeError("gmx-native-value-required");
+  if (positions.some((p) => !Number.isFinite(p?.sizeUsd))) throw new TypeError("gmx-position-size-required");
   const stable = new Set(stablecoins.map((a) => a.toLowerCase()));
   const heldPositions = positions.filter((p) => p.sizeUsd > 0).map((p) => ({ market: p.market, side: p.isLong ? "long" : "short", sizeCents: Math.round(p.sizeUsd * 100), collateralToken: p.collateralToken, collateralCents: stable.has(p.collateralToken.toLowerCase()) ? Math.round((Number(p.collateralAmount) / 1e6) * 100) : null }));
-  const collateralCents = heldPositions.reduce((sum, p) => sum + (p.collateralCents ?? 0), 0);
   const cashCents = Math.round(usdcAmount * 100);
-  return { cashCents, equityCents: cashCents + collateralCents + Math.round(holdingsUsd * 100), freeCashCents: cashCents, gasUsd: nativeUsd, positions: heldPositions };
+  const holdingsCents = Math.round(holdingsUsd * 100);
+  if (!Number.isFinite(cashCents) || !Number.isFinite(holdingsCents)
+    || heldPositions.some((p) => !Number.isFinite(p.sizeCents)
+      || (p.collateralCents !== null && !Number.isFinite(p.collateralCents))))
+    throw new RangeError("gmx-account-value-out-of-range");
+  const collateralCents = heldPositions.some((p) => p.collateralCents === null)
+    ? null : heldPositions.reduce((sum, p) => sum + p.collateralCents, 0);
+  const equityCents = collateralCents === null ? null : cashCents + collateralCents + holdingsCents;
+  if (equityCents !== null && !Number.isFinite(equityCents)) throw new RangeError("gmx-account-value-out-of-range");
+  return { cashCents, equityCents, freeCashCents: cashCents, gasUsd: nativeUsd, positions: heldPositions };
 }
 
 /* ------------------------------------------------------------------ carry (funding and borrowing) */
