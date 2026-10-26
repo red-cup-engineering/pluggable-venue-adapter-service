@@ -155,7 +155,7 @@ test('signed buyer payment reuses its exact recent source block after chain adva
     }}});
   const challenge=await handler(post(route+'/buy'));
   assert.equal(challenge.status,402);
-  const signed=payload({headers:{'PAYMENT-REQUIRED':challenge.headers.get('PAYMENT-REQUIRED')}});
+  const signed=paymentHeader({headers:{'PAYMENT-REQUIRED':challenge.headers.get('PAYMENT-REQUIRED')}});
   latest=126;
   const paid=await handler(post(route+'/buy',{'payment-signature':signed}));
   assert.equal(paid.status,202);
@@ -166,12 +166,12 @@ test('signed buyer payment reuses its exact recent source block after chain adva
 
 test('only matching independently settled fills produce canonical PAYMENT-RESPONSE on HTTP 200',async()=>{
   const original=quote({resource:{url:origin+route+'/buy'}});
-  const signed=payload(original);
+  const signed=paymentHeader(original);
   const settled={status:200,body:{status:'filled',transactionHash:N('6'),network:'eip155:84532',
     market:A('c'),askId:'42',lots:'2',recipient:A('b'),amount:'1111000',
     sourceEconomicEvent:{type:'EvmAgentPredictionAskFilled',chain:'eip155:84532',
       blockNumber:125,blockHash:N('8'),transactionHash:N('6'),logIndex:6,
-      emitter:A('c'),event:'AskFilled'}};
+      emitter:A('c'),event:'AskFilled'}}};
   const handler=create({active:true,admitBuyer:()=>true,settlementOperation:{execute:async()=>settled}});
   const response=await handler(post(route+'/buy',{'payment-signature':signed}));
   assert.equal(response.status,200);
@@ -191,7 +191,7 @@ test('only matching independently settled fills produce canonical PAYMENT-RESPON
 
 test('deterministic custody preflight refusal is a real 409, never a fabricated pending charge',async()=>{
   const challenge=quote({resource:{url:origin+route+'/buy'}});
-  const signed=payload(challenge);
+  const signed=paymentHeader(challenge);
   for(const refusal of ['order_intent_conflict','preflight_refused']){
     const handle=create({active:true,admitBuyer:()=>true,
       settlementOperation:{execute:async()=>({status:409,body:{status:refusal,retryPayment:false}})}});
@@ -204,7 +204,7 @@ test('deterministic custody preflight refusal is a real 409, never a fabricated 
 
 test('HTTP refuses a settlement without any original on-chain economic event provenance',async()=>{
   const original=quote({resource:{url:origin+route+'/buy'}});
-  const signed=payload(original);
+  const signed=paymentHeader(original);
   const fake={status:200,body:{status:'filled',transactionHash:N('6'),network:'eip155:84532',
     market:A('c'),askId:'42',lots:'2',recipient:A('b'),amount:'1111000'}};
   const handler=create({active:true,admitBuyer:()=>true,
