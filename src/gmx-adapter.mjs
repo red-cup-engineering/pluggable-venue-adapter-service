@@ -43,7 +43,7 @@ function clean(value, seen = new Set()) { if (typeof value === "bigint") return 
 
 import { GMX_CHAINS, GMX_SIGNATURES, ORDER_TYPE, T_ORDER_PARAMS, T_DEPOSIT_PARAMS, T_GLV_DEPOSIT_PARAMS, T_GLV_WITHDRAWAL_PARAMS } from "../data/gmx/contracts.mjs";
 import { encode, integer, selectorOf } from "./gmx/abi.mjs";
-import { decodeAccountPositions, decodeAccountOrders, usdToE30 } from "./gmx/model.mjs";
+import { decodeAccountPositions, decodeAccountOrders, usdToE30, e30ToUsd } from "./gmx/model.mjs";
 import { createGmxPublicReader } from "./gmx/public-reader.mjs";
 import { GMX_REWARDS } from "../data/gmx/rewards.mjs";
 import { Interface } from "ethers";

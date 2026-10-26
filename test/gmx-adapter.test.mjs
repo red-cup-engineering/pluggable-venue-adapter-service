@@ -53,7 +53,8 @@ test("reads: account, positions and orders are admitted, decoded, frozen and car
   assert.equal(positions.payload.positions[0].sizeUsd, 20);
   assert.equal(positions.payload.positions[0].isLong, true);
   assert.equal(positions.payload.positions[0].pendingImpactAmount, "-5");
-  assert.deepEqual(orders.payload, { orders: [] });
+  assert.deepEqual(positions.payload.range, { start: 0, end: 100, complete: true });
+  assert.deepEqual(orders.payload, { orders: [], range: { start: 0, end: 100, complete: true } });
   assert.ok(calls.every((call) => call.method === "eth_call" || call.method === "eth_getBalance"), "reads use only eth_call and eth_getBalance");
   for (const forbidden of ["sign", "send", "placeOrder", "broadcast", "sendTransaction"]) assert.equal(adapter[forbidden], undefined);
   assert.deepEqual(decodeAccountPositions(`0x${encode([{ array: "uint256" }], [[]])}`), []);
