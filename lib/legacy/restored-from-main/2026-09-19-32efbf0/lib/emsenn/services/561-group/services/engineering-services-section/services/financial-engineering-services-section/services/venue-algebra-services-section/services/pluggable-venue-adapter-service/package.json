@@ -1,0 +1,23 @@
+{
+  "name": "@red-cup-engineering/pluggable-venue-adapter-service",
+  "version": "0.1.5",
+  "type": "module",
+  "files": [
+    "src/",
+    "data/"
+  ],
+  "exports": {
+    "./alpaca": "./src/alpaca-adapter.mjs",
+    "./alpaca-broker-admin": "./src/alpaca-broker-admin.mjs",
+    "./brokerage-record-identity": "./src/brokerage-record-identity.mjs",
+    "./src/alpaca-adapter.mjs": "./src/alpaca-adapter.mjs"
+  },
+  "scripts": {
+    "check": "node --check src/alpaca-adapter.mjs && node --check src/alpaca-broker-admin.mjs && node --check src/brokerage-record-identity.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "description": "pluggable-venue-adapter-service sovereign enterprise",
+  "dependencies": {
+    "@red-cup-engineering/semantic-content-identify-service": "0.2.7"
+  }
+}
